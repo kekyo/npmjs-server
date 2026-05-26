@@ -1,0 +1,534 @@
+// npmjs-server - NPM package registry on Node.js
+// Copyright (c) Kouji Matsui (@kekyo@mi.kekyo.net)
+// License under MIT.
+
+import { useState, useRef } from 'react';
+import {
+  Drawer,
+  Box,
+  Typography,
+  Button,
+  TextField,
+  Alert,
+  CircularProgress,
+  IconButton,
+  Divider,
+  Paper,
+} from '@mui/material';
+import {
+  Close as CloseIcon,
+  CloudUpload as UploadIcon,
+  CheckCircle as SuccessIcon,
+  Error as ErrorIcon,
+  FileUpload as FileUploadIcon,
+  Clear as ClearIcon,
+} from '@mui/icons-material';
+import { apiFetch } from '../utils/apiClient';
+import {
+  Chip,
+  LinearProgress,
+  List,
+  ListItemIcon,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Stack,
+} from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import { TypedMessage, useTypedMessage } from 'typed-message';
+import { messages } from '../../generated/messages';
+import {
+  createUploadFileSelection,
+  type UploadFileSelectionMode,
+} from '../uploadFileSelection';
+
+interface UploadDrawerProps {
+  open: boolean;
+  onClose: () => void;
+  onUploadSuccess: () => void;
+}
+
+interface UploadResult {
+  fileName: string;
+  success: boolean;
+  packageName?: string;
+  version?: string;
+  message?: string;
+  status: 'pending' | 'uploading' | 'success' | 'error';
+}
+
+const UploadDrawer = ({
+  open,
+  onClose,
+  onUploadSuccess,
+}: UploadDrawerProps) => {
+  const getMessage = useTypedMessage();
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
+  const [currentUploadIndex, setCurrentUploadIndex] = useState<number>(-1);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounter = useRef(0);
+
+  const handleFileSelection = (
+    files: File[],
+    mode: UploadFileSelectionMode
+  ) => {
+    const selection = createUploadFileSelection({
+      currentFiles: selectedFiles,
+      incomingFiles: files,
+      mode,
+    });
+
+    if (selection.invalidCount > 0) {
+      alert(
+        getMessage(messages.INVALID_FILES_EXCLUDED, {
+          count: selection.invalidCount,
+        })
+      );
+    }
+
+    if (selection.acceptedFiles.length > 0) {
+      setSelectedFiles(selection.selectedFiles);
+      setUploadResults([]);
+      setCurrentUploadIndex(-1);
+    }
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (files && files.length > 0) {
+      handleFileSelection(Array.from(files), 'replace');
+    }
+  };
+
+  const handleUpload = async () => {
+    if (selectedFiles.length === 0) return;
+
+    setUploading(true);
+    const results: UploadResult[] = [];
+
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const file = selectedFiles[i];
+      if (!file) continue;
+
+      setCurrentUploadIndex(i);
+
+      const result: UploadResult = {
+        fileName: file.name,
+        success: false,
+        status: 'uploading',
+        packageName: file.name.replace('.tgz', ''),
+      };
+
+      try {
+        // Update status for current file
+        setUploadResults([...results, result]);
+
+        // Read file as ArrayBuffer to send as binary data
+        const fileBuffer = await file.arrayBuffer();
+
+        const response = await apiFetch('api/publish', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+          },
+          body: fileBuffer,
+          credentials: 'same-origin',
+        });
+
+        if (response.ok) {
+          const apiResult = await response.json();
+          result.success = true;
+          result.status = 'success';
+          result.version = apiResult.version;
+          result.message = `${apiResult.message}\nResolved: ${apiResult.id} ${apiResult.version}`;
+        } else if (response.status === 401) {
+          // Session expired - handled by apiFetch interceptor
+          handleClose();
+          return;
+        } else {
+          const errorText = await response.text();
+          result.status = 'error';
+          result.message = `Upload failed: ${response.status} ${response.statusText}\n${errorText}`;
+        }
+      } catch (error) {
+        result.status = 'error';
+        result.message = `${getMessage(messages.UPLOAD_ERROR)}: ${error instanceof Error ? error.message : getMessage(messages.UNKNOWN_ERROR)}`;
+      }
+
+      results.push(result);
+      setUploadResults([...results]);
+    }
+
+    setUploading(false);
+    setCurrentUploadIndex(-1);
+
+    // Call success callback if at least one upload succeeded
+    if (results.some((r) => r.success)) {
+      onUploadSuccess();
+    }
+  };
+
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
+      setIsDragging(false);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    dragCounter.current = 0;
+
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      handleFileSelection(Array.from(files), 'append');
+    }
+  };
+
+  const handleClose = () => {
+    setSelectedFiles([]);
+    setUploading(false);
+    setUploadResults([]);
+    setCurrentUploadIndex(-1);
+    setIsDragging(false);
+    dragCounter.current = 0;
+    onClose();
+  };
+
+  const resetForm = () => {
+    setSelectedFiles([]);
+    setUploadResults([]);
+    setCurrentUploadIndex(-1);
+  };
+
+  const removeFile = (index: number) => {
+    setSelectedFiles((files) => files.filter((_, i) => i !== index));
+  };
+
+  const getTotalSize = () => {
+    return selectedFiles.reduce((total, file) => total + file.size, 0);
+  };
+
+  return (
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={handleClose}
+      variant="temporary"
+      sx={{
+        width: 400,
+        flexShrink: 0,
+        '& .MuiDrawer-paper': {
+          width: 400,
+          boxSizing: 'border-box',
+        },
+      }}
+    >
+      <Box
+        sx={{ p: 3, height: '100%' }}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            mb: 3,
+          }}
+        >
+          <Typography variant="h6" component="h2">
+            <TypedMessage message={messages.UPLOAD_PACKAGE} />
+          </Typography>
+          <IconButton onClick={handleClose} edge="end">
+            <CloseIcon />
+          </IconButton>
+        </Box>
+
+        <Divider sx={{ mb: 3 }} />
+
+        {uploadResults.length === 0 ? (
+          <Box>
+            <Typography variant="body1" sx={{ mb: 2 }}>
+              <TypedMessage message={messages.SELECT_NUPKG_FILES} />
+            </Typography>
+
+            <Paper
+              sx={{
+                p: 4,
+                mb: 3,
+                textAlign: 'center',
+                border: isDragging ? '2px dashed #2196f3' : '2px dashed #ccc',
+                backgroundColor: isDragging
+                  ? (theme) =>
+                      theme.palette.mode === 'dark'
+                        ? 'rgba(33, 150, 243, 0.1)'
+                        : 'rgba(33, 150, 243, 0.05)'
+                  : 'transparent',
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+                '&:hover': {
+                  backgroundColor: (theme) =>
+                    theme.palette.mode === 'dark'
+                      ? 'rgba(255, 255, 255, 0.05)'
+                      : 'rgba(0, 0, 0, 0.02)',
+                  borderColor: '#999',
+                },
+              }}
+              variant="outlined"
+              elevation={0}
+              onClick={() => document.getElementById('file-input')?.click()}
+            >
+              <FileUploadIcon
+                sx={{
+                  fontSize: 48,
+                  color: isDragging ? '#2196f3' : 'text.secondary',
+                  mb: 2,
+                  transition: 'color 0.3s ease',
+                }}
+              />
+
+              {isDragging ? (
+                <Typography variant="h6" color="primary" sx={{ mb: 1 }}>
+                  <TypedMessage message={messages.DROP_FILES_HERE} />
+                </Typography>
+              ) : (
+                <>
+                  <Typography variant="h6" color="text.primary" sx={{ mb: 1 }}>
+                    <TypedMessage message={messages.DRAG_DROP_FILES} />
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    <TypedMessage message={messages.OR_CLICK_TO_BROWSE} />
+                  </Typography>
+                </>
+              )}
+            </Paper>
+
+            <TextField
+              id="file-input"
+              type="file"
+              fullWidth
+              variant="outlined"
+              slotProps={{
+                htmlInput: {
+                  accept: '.tgz',
+                  multiple: true,
+                },
+              }}
+              onChange={handleFileChange}
+              sx={{ display: 'none' }}
+            />
+
+            {selectedFiles.length > 0 && (
+              <Paper sx={{ p: 2, mb: 3 }} variant="outlined" elevation={0}>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ mb: 1 }}
+                >
+                  <TypedMessage
+                    message={messages.SELECTED_FILES}
+                    params={{
+                      count: selectedFiles.length,
+                      plural: selectedFiles.length !== 1 ? 's' : '',
+                      size: (getTotalSize() / 1024 / 1024).toFixed(2),
+                    }}
+                  />
+                  :
+                </Typography>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  useFlexGap
+                  sx={{ flexWrap: 'wrap' }}
+                >
+                  {selectedFiles.map((file, index) => (
+                    <Chip
+                      key={index}
+                      label={file.name}
+                      onDelete={() => removeFile(index)}
+                      deleteIcon={<ClearIcon />}
+                      size="small"
+                      sx={{ mb: 1 }}
+                    />
+                  ))}
+                </Stack>
+              </Paper>
+            )}
+
+            {uploading && currentUploadIndex >= 0 && (
+              <Box sx={{ mb: 2 }}>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ mb: 1 }}
+                >
+                  <TypedMessage
+                    message={messages.UPLOADING_PROGRESS}
+                    params={{
+                      current: currentUploadIndex + 1,
+                      total: selectedFiles.length,
+                      fileName: selectedFiles[currentUploadIndex]?.name || '',
+                    }}
+                  />
+                </Typography>
+                <LinearProgress
+                  variant="determinate"
+                  value={(currentUploadIndex / selectedFiles.length) * 100}
+                />
+              </Box>
+            )}
+
+            <Button
+              variant="contained"
+              fullWidth
+              startIcon={
+                uploading ? <CircularProgress size={20} /> : <UploadIcon />
+              }
+              onClick={handleUpload}
+              disabled={selectedFiles.length === 0 || uploading}
+              sx={{ mb: 2 }}
+            >
+              {uploading
+                ? getMessage(messages.UPLOADING_N_OF_M, {
+                    current: currentUploadIndex + 1,
+                    total: selectedFiles.length,
+                  })
+                : getMessage(messages.UPLOAD_N_FILES, {
+                    count: selectedFiles.length,
+                    plural: selectedFiles.length !== 1 ? 's' : '',
+                  })}
+            </Button>
+          </Box>
+        ) : (
+          <Box>
+            {/* Summary */}
+            <Box sx={{ mb: 3 }}>
+              {uploadResults.filter((r) => r.status === 'success').length ===
+              uploadResults.length ? (
+                <Alert severity="success" icon={<SuccessIcon />}>
+                  <TypedMessage
+                    message={messages.ALL_UPLOADS_SUCCESS}
+                    params={{
+                      count: uploadResults.length,
+                      plural: uploadResults.length !== 1 ? 's' : '',
+                    }}
+                  />
+                </Alert>
+              ) : uploadResults.filter((r) => r.status === 'error').length ===
+                uploadResults.length ? (
+                <Alert severity="error" icon={<ErrorIcon />}>
+                  <TypedMessage message={messages.ALL_UPLOADS_FAILED} />
+                </Alert>
+              ) : (
+                <Alert severity="warning">
+                  <TypedMessage
+                    message={messages.PARTIAL_UPLOAD_SUCCESS}
+                    params={{
+                      success: uploadResults.filter(
+                        (r) => r.status === 'success'
+                      ).length,
+                      total: uploadResults.length,
+                      plural: uploadResults.length !== 1 ? 's' : '',
+                    }}
+                  />
+                </Alert>
+              )}
+            </Box>
+
+            {/* Results List */}
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              <TypedMessage message={messages.UPLOAD_RESULTS} />
+            </Typography>
+
+            <List sx={{ mb: 3 }}>
+              {uploadResults.map((result, index) => (
+                <Accordion
+                  key={index}
+                  defaultExpanded={result.status === 'error'}
+                >
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <ListItemIcon sx={{ minWidth: 40 }}>
+                      {result.status === 'success' ? (
+                        <SuccessIcon color="success" />
+                      ) : result.status === 'error' ? (
+                        <ErrorIcon color="error" />
+                      ) : result.status === 'uploading' ? (
+                        <CircularProgress size={20} />
+                      ) : null}
+                    </ListItemIcon>
+                    <Typography sx={{ flexGrow: 1 }}>
+                      {result.fileName}
+                    </Typography>
+                    {result.version && (
+                      <Typography variant="caption" color="text.secondary">
+                        v{result.version}
+                      </Typography>
+                    )}
+                  </AccordionSummary>
+                  {result.message && (
+                    <AccordionDetails>
+                      <Paper
+                        sx={{
+                          p: 1,
+                          borderRadius: 1,
+                          backgroundColor: (theme) =>
+                            theme.palette.mode === 'dark'
+                              ? 'rgba(255, 255, 255, 0.05)'
+                              : 'rgba(0, 0, 0, 0.02)',
+                        }}
+                        variant="outlined"
+                        elevation={0}
+                      >
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontFamily: 'monospace',
+                            fontSize: '0.75rem',
+                            whiteSpace: 'pre-wrap',
+                          }}
+                        >
+                          {result.message}
+                        </Typography>
+                      </Paper>
+                    </AccordionDetails>
+                  )}
+                </Accordion>
+              ))}
+            </List>
+
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button variant="outlined" onClick={resetForm} sx={{ flex: 1 }}>
+                <TypedMessage message={messages.UPLOAD_MORE} />
+              </Button>
+            </Box>
+          </Box>
+        )}
+      </Box>
+    </Drawer>
+  );
+};
+
+export default UploadDrawer;
