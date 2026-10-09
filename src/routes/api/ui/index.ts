@@ -2,21 +2,21 @@
 // Copyright (c) Kouji Matsui (@kekyo@mi.kekyo.net)
 // License under MIT.
 
-import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { promises as fs } from 'fs';
 import { join } from 'path';
-import { ReaderWriterLock } from 'async-primitives';
-import { Logger } from '../../../types';
-import { UserService } from '../../../services/userService';
-import { SessionService } from '../../../services/sessionService';
-import { AuthService } from '../../../services/authService';
-import { MetadataService } from '../../../services/metadataService';
-import { AuthenticatedFastifyRequest } from '../../../middleware/fastifyAuth';
+import type { ReaderWriterLock } from 'async-primitives';
+import type { Logger } from '../../../types.ts';
+import type { UserService } from '../../../services/userService.ts';
+import type { SessionService } from '../../../services/sessionService.ts';
+import type { AuthService } from '../../../services/authService.ts';
+import type { MetadataService } from '../../../services/metadataService.ts';
+import type { AuthenticatedFastifyRequest } from '../../../middleware/fastifyAuth.ts';
 import {
   name as packageName,
   version,
-} from '../../../generated/packageMetadata';
-import { streamFile } from '../../../utils/fileStreaming';
+} from '../../../generated/packageMetadata.ts';
+import { streamFile } from '../../../utils/fileStreaming.ts';
 
 /**
  * Configuration for UI routes

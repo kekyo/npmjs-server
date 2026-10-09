@@ -148,10 +148,12 @@ platform_to_tag_suffix() {
 build_platform_image() {
     local platform="$1"
     local image="$2"
+    local base_image="$3"
 
     print_info "Building ${platform} as ${image}..."
     podman build \
-        --build-arg "NODE_IMAGE=${NODE_IMAGE}" \
+        --pull=never \
+        --build-arg "NODE_IMAGE=${base_image}" \
         --platform "$platform" \
         --tag "$image" \
         .
@@ -199,13 +201,13 @@ run_http_smoke_check() {
     container_name="npmjs-server-smoke-${label}-$(date +%s)-${RANDOM}"
 
     print_info "HTTP smoke check (${label})..."
-    if ! podman run -d --name "$container_name" -p 127.0.0.1::5963 \
+    if ! podman run -d --name "$container_name" -p 127.0.0.1::4873 \
         "${run_platform_args[@]}" "$image" >/dev/null; then
         print_error "Failed to start container for smoke check (${label})"
         exit 1
     fi
 
-    port_line=$(podman port "$container_name" 5963/tcp | head -n 1 || true)
+    port_line=$(podman port "$container_name" 4873/tcp | head -n 1 || true)
     host_port="${port_line##*:}"
 
     if ! [[ "$host_port" =~ ^[0-9]+$ ]]; then
@@ -234,9 +236,9 @@ run_http_smoke_check() {
         fail_smoke_check "$container_name" "Health endpoint check failed (${label})"
     fi
 
-    if ! curl -fsS --max-time 5 "http://127.0.0.1:${host_port}/v3/index.json" \
-        | jq -e '.version and (.resources | type == "array") and (.resources | length > 0)' >/dev/null; then
-        fail_smoke_check "$container_name" "NuGet V3 endpoint check failed (${label})"
+    if ! curl -fsS --max-time 5 "http://127.0.0.1:${host_port}/-/ping" \
+        | jq -e '.ok == true' >/dev/null; then
+        fail_smoke_check "$container_name" "npm registry endpoint check failed (${label})"
     fi
 
     if ! curl -fsS --max-time 5 -H 'Accept: text/html' "http://127.0.0.1:${host_port}/" \
@@ -249,10 +251,13 @@ run_http_smoke_check() {
 
 verify_target_platforms() {
     print_info "Verifying all target platforms..."
+    local platform_image
     while IFS= read -r platform; do
         [ -z "$platform" ] && continue
-        run_binary_load_check "$platform" "$LOCAL_IMAGE"
-        run_http_smoke_check "$platform" "$LOCAL_IMAGE" "target-${platform//\//-}"
+        # A shared manifest tag may resolve to an already cached architecture.
+        platform_image="${LOCAL_IMAGE}-$(platform_to_tag_suffix "$platform")"
+        run_binary_load_check "$platform" "$platform_image"
+        run_http_smoke_check "$platform" "$platform_image" "target-${platform//\//-}"
     done < <(echo "$PLATFORMS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')
     print_info "All target platform checks passed"
 }
@@ -305,6 +310,18 @@ build_multiplatform_images() {
     print_info "Local image: ${LOCAL_IMAGE}"
     print_info "Remote image: ${REMOTE_IMAGE}"
 
+    # Podman stores one architecture per tag. Pull sequentially, then pin each
+    # build to its image ID so parallel FROM instructions cannot race on the tag.
+    local platform
+    declare -A platform_base_images=()
+    for platform in "${TARGET_PLATFORMS[@]}"; do
+        print_info "Preparing Node image for ${platform}..."
+        if ! platform_base_images["$platform"]=$(podman pull --quiet --platform "$platform" "$NODE_IMAGE"); then
+            print_error "Failed to prepare Node image for platform: ${platform}"
+            return 1
+        fi
+    done
+
     # Create manifest for versioned tag
     MANIFEST_NAME="${LOCAL_IMAGE}"
     print_info "Creating manifest: ${MANIFEST_NAME}"
@@ -316,7 +333,6 @@ build_multiplatform_images() {
 
     # Build each platform image, optionally in parallel, then compose the manifest.
     print_info "Building for platforms: ${PLATFORMS}"
-    local platform
     local platform_image
     local -a platform_images=()
     local -a running_pids=()
@@ -326,7 +342,7 @@ build_multiplatform_images() {
     for platform in "${TARGET_PLATFORMS[@]}"; do
         platform_image="${LOCAL_IMAGE}-$(platform_to_tag_suffix "$platform")"
         platform_images+=("$platform_image")
-        build_platform_image "$platform" "$platform_image" &
+        build_platform_image "$platform" "$platform_image" "${platform_base_images[$platform]}" &
         pid=$!
         running_pids+=("$pid")
         build_pid_to_platform["$pid"]="$platform"
@@ -566,9 +582,9 @@ main() {
 
     if [ "$PUSH_TO_REGISTRY" != "true" ]; then
         print_info ""
-        print_info "To test the multi-arch image locally:"
-        print_info "  podman run --platform linux/amd64 -p 5963:5963 ${LOCAL_IMAGE}"
-        print_info "  podman run --platform linux/arm64 -p 5963:5963 ${LOCAL_IMAGE}"
+        print_info "To test the platform images locally:"
+        print_info "  podman run --platform linux/amd64 -p 4873:4873 ${LOCAL_IMAGE}-linux-amd64"
+        print_info "  podman run --platform linux/arm64 -p 4873:4873 ${LOCAL_IMAGE}-linux-arm64"
     fi
 }
 

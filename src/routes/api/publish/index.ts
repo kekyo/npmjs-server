@@ -2,17 +2,17 @@
 // Copyright (c) Kouji Matsui (@kekyo@mi.kekyo.net)
 // License under MIT.
 
-import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { Logger, DuplicatePackagePolicy } from '../../../types';
-import { AuthService } from '../../../services/authService';
-import { MetadataService } from '../../../services/metadataService';
-import { publishNpmTarball } from '../../../services/npmPublishService';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { Logger, DuplicatePackagePolicy } from '../../../types.ts';
+import type { AuthService } from '../../../services/authService.ts';
+import type { MetadataService } from '../../../services/metadataService.ts';
+import { publishNpmTarball } from '../../../services/npmPublishService.ts';
 import {
   createNpmHybridAuthMiddleware,
-  FastifyAuthConfig,
-  AuthenticatedFastifyRequest,
-} from '../../../middleware/fastifyAuth';
-import { createUrlResolver } from '../../../utils/urlResolver';
+  type FastifyAuthConfig,
+  type AuthenticatedFastifyRequest,
+} from '../../../middleware/fastifyAuth.ts';
+import { createUrlResolver } from '../../../utils/urlResolver.ts';
 
 /**
  * Configuration for UI package publish routes.

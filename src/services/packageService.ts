@@ -4,7 +4,7 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import { packageNameToPathSegments } from '../utils/npmPackage';
+import { packageNameToPathSegments } from '../utils/npmPackage.ts';
 
 /**
  * Service interface for accessing npm package files from disk.

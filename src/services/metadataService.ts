@@ -6,13 +6,13 @@ import fs from 'fs/promises';
 import path from 'path';
 import semver from 'semver';
 import { createReaderWriterLock } from 'async-primitives';
-import { Logger, DuplicatePackagePolicy } from '../types';
+import type { Logger, DuplicatePackagePolicy } from '../types.ts';
 import {
   createTarballFileName,
   encodePackageNameForPath,
-  NpmPackageManifest,
+  type NpmPackageManifest,
   packageNameToPathSegments,
-} from '../utils/npmPackage';
+} from '../utils/npmPackage.ts';
 
 /**
  * Metadata stored for a single npm package version.

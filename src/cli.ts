@@ -23,6 +23,7 @@ import {
   getTrustedProxiesFromEnv,
 } from './utils/urlResolver';
 import { runAuthInit } from './authInit';
+import { runTotpReset } from './totpReset';
 import { loadConfigFromPath } from './utils/configLoader';
 import { dirname } from 'path';
 
@@ -87,8 +88,7 @@ const getUsersFileFromEnv = (): string | undefined => {
 };
 
 const getDuplicatePackagePolicyFromEnv = ():
-  | DuplicatePackagePolicy
-  | undefined => {
+  DuplicatePackagePolicy | undefined => {
   const policy = process.env.NPMJS_SERVER_DUPLICATE_PACKAGE_POLICY;
   if (policy === 'overwrite' || policy === 'ignore' || policy === 'error') {
     return policy;
@@ -206,6 +206,12 @@ program
       'initialize authentication with interactive admin user creation'
     )
   )
+  .addOption(
+    new Option(
+      '--totp-reset <username>',
+      "reset a user's two-factor authentication (stop the server first)"
+    ).conflicts('authInit')
+  )
   .action(async (options) => {
     // Determine config file path
     const configFilePath =
@@ -246,6 +252,8 @@ program
     const authMode =
       options.authMode || getAuthModeFromEnv() || configFile.authMode || 'none';
     const sessionSecret = getSessionSecretFromEnv() || configFile.sessionSecret;
+    const totpKeyFile =
+      process.env.NPMJS_SERVER_TOTP_KEY_FILE || configFile.totpKeyFile;
     const passwordMinScore =
       getPasswordMinScoreFromEnv() ?? configFile.passwordMinScore ?? 2;
     const passwordStrengthCheck =
@@ -383,6 +391,7 @@ program
       trustedProxies,
       logLevel: logLevel as LogLevel,
       sessionSecret,
+      totpKeyFile,
       passwordMinScore,
       passwordStrengthCheck,
       duplicatePackagePolicy: duplicatePackagePolicy as DuplicatePackagePolicy,
@@ -393,6 +402,17 @@ program
         packageDir: proxyPackageDir,
       },
     };
+
+    // Handle offline second-factor recovery
+    if (options.totpReset) {
+      try {
+        await runTotpReset(config, logger, options.totpReset);
+      } catch (error) {
+        logger.error(`Failed to reset two-factor authentication: ${error}`);
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     // Handle auth-init mode
     if (options.authInit) {

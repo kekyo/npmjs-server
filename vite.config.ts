@@ -1,12 +1,12 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type BuildOptions } from 'vite';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 import react from '@vitejs/plugin-react';
 import screwUp from 'screw-up';
 import prettierMax from 'prettier-max';
 import typedMessage from 'typed-message/vite';
-import { fastifyHost } from './src/plugins/vite-plugin-fastify';
-import { ServerConfig } from './src/types';
+import { fastifyHost } from './src/plugins/vite-plugin-fastify.ts';
+import type { ServerConfig } from './src/types.ts';
 
 // Development server configuration
 const devConfig: ServerConfig = {
@@ -15,12 +15,22 @@ const devConfig: ServerConfig = {
   packageDir: './dev/packages',
   realm: 'npmjs-server dev',
   trustedProxies: [],
-  authMode: 'none',
+  authMode: 'publish',
 };
 
 ////////////////////////////////////////////////////////////////////
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
+
+const buildLogOptions: NonNullable<BuildOptions['rolldownOptions']> = {
+  onLog: (level, log, handler) => {
+    // Formatting and full TypeScript validation intentionally dominate these small bundles.
+    if (log.code === 'PLUGIN_TIMINGS' && log.message.includes('prettier-max')) {
+      return;
+    }
+    handler(level, log);
+  },
+};
 
 export default defineConfig(({ mode, command }) => {
   const isDev = mode === 'development';
@@ -54,6 +64,7 @@ export default defineConfig(({ mode, command }) => {
         emptyOutDir: true,
         chunkSizeWarningLimit: 10000,
         rollupOptions: {
+          ...buildLogOptions,
           input: {
             index: resolve(__dirname, 'src/ui/index.html'),
             login: resolve(__dirname, 'src/ui/login.html'),
@@ -85,6 +96,7 @@ export default defineConfig(({ mode, command }) => {
         emptyOutDir: false, // Don't clean server build files
         chunkSizeWarningLimit: 10000,
         rollupOptions: {
+          ...buildLogOptions,
           input: {
             index: resolve(__dirname, 'src/ui/index.html'),
             login: resolve(__dirname, 'src/ui/login.html'),
@@ -121,6 +133,7 @@ export default defineConfig(({ mode, command }) => {
         formats: ['es'],
       },
       rolldownOptions: {
+        ...buildLogOptions,
         external: [
           'commander',
           'fs/promises',
@@ -132,6 +145,7 @@ export default defineConfig(({ mode, command }) => {
           'url',
           'events',
           'stream',
+          'stream/promises',
           'buffer',
           'timers',
           'util',
@@ -145,6 +159,7 @@ export default defineConfig(({ mode, command }) => {
           '@fastify/static',
           '@fastify/send',
           'passport-local',
+          'otpauth',
           'readline',
           'glob',
           'path-scurry',
