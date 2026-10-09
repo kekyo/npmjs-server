@@ -384,6 +384,16 @@ npm install dayjs --registry http://localhost:4873/
 
 In `full` mode, log in to this server first.
 
+### Removing Private Registry URLs
+
+Enabling the proxy lets you centralize the npm registry used within your internal network, but one issue remains.
+
+When you use npm, `package-lock.json` records the URL from which each package was downloaded in its `resolved` field. Installing packages from a private registry with commands such as `npm install` therefore stores private registry URLs in the lockfile. Committing that file to Git may expose those URLs.
+
+The lockfile also stores a content hash in the `integrity` field to verify the package archive. See the [npm lockfile documentation](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/#packages) for details. For packages available through the configured registry, npm can use this hash to verify their contents without retaining the original download URL.
+
+Use [resolved-killer](https://github.com/kekyo/resolved-killer/) to remove these URLs from `package-lock.json` while preserving integrity verification. This prevents private registry URLs from being exposed through the lockfile's `resolved` fields while allowing npm to verify the downloaded packages.
+
 ## Reverse Proxy Interoperability
 
 You can use a reverse proxy for TLS termination or public access. If the public URL is fixed, set `baseUrl` to the URL used by browsers and npm clients.
