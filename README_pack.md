@@ -18,6 +18,8 @@ Packages and user information are stored in files, so no database is required. B
 
 A browser-based administration UI lets you browse packages and versions, read READMEs, download packages, upload multiple `.tgz` files, manage users, revoke npm tokens, and configure two-step authentication.
 
+![Package list and downloads by version, using demo data](./images/npmjs-server-ss-1.png)
+
 ### Key Features
 
 - npm client support, including `npm publish`, `npm install`, `npm search`, and `npm dist-tag`.

@@ -25,7 +25,8 @@
   "files": [
     "dist",
     "LICENSE",
-    "./images/npmjs-server-120.png"
+    "./images/npmjs-server-120.png",
+    "./images/npmjs-server-ss-1.png"
   ],
   "scripts": {
     "dependencies": "node -e \"if (process.env.NODE_ENV !== 'production') require('node:child_process').execSync('reskill', { stdio: 'inherit' })\"",

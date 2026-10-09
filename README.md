@@ -31,6 +31,18 @@ A browser-based administration UI is also provided:
 - Add or delete users, change passwords, and reset user passwords.
 - View and revoke npm tokens, and configure two-step authentication.
 
+Browse packages (demo data)
+
+![Package list and downloads by version](./images/npmjs-server-ss-1.png)
+
+Publish packages
+
+![Package upload screen](./images/npmjs-server-ss-2.png)
+
+Register users
+
+![User registration with username, password, and role](./images/npmjs-server-ss-3.png)
+
 ### Key Features
 
 - npm client support, including `npm publish`, `npm install`, `npm search`, and `npm dist-tag`.
@@ -282,6 +294,8 @@ npm whoami --registry http://localhost:4873/
 
 Administrators can add or delete users and reset their passwords through the administration UI. Each user can change their own password.
 
+![User registration and role selection](./images/npmjs-server-ss-3.png)
+
 | Role | Allowed operations |
 | --- | --- |
 | `read` | Read, search for, and download packages |
@@ -300,6 +314,8 @@ When `authMode` is `publish` or `full`, each user can enable two-step authentica
 3. Scan the QR code with your authenticator app, or enter the manual setup key.
 4. Enter the six-digit code from the app to enable two-step authentication.
 5. Save the ten recovery codes somewhere safe. They cannot be displayed again after you close this screen.
+
+![Authenticator registration for a demo account](./images/npmjs-server-ss-4.png)
 
 The QR code is generated locally in the browser.
 Use an authenticator app supporting TOTP as defined in [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238.html), with SHA-1, six digits, and a 30-second interval.
@@ -363,6 +379,8 @@ See the [official npm login documentation](https://docs.npmjs.com/cli/v11/comman
 Each login issues a token, with a maximum of 50 per user.
 Open "npm tokens" from the administration UI's user menu to see your tokens, their creation dates, and their last usage, and to revoke tokens you no longer need.
 Revocation takes effect immediately. Token values cannot be displayed again in the UI.
+
+![npm token list and revocation](./images/npmjs-server-ss-5.png)
 
 For CI, store an issued token as a CI secret and configure it as described under [Non-interactive Mode (CI/CD)](#non-interactive-mode-cicd).
 
