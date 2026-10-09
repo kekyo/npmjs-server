@@ -1,78 +1,65 @@
 # npmjs-server
 
-A file-backed npm package registry server with npm CLI protocol support and a React/MUI administration UI.
+A simple private npm registry running on Node.js.
+
+![npmjs-server](https://raw.githubusercontent.com/kekyo/npmjs-server/develop/images/npmjs-server-120.png)
+
+[![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Docker Image Version](https://img.shields.io/docker/v/kekyo/npmjs-server.svg?label=docker)](https://hub.docker.com/r/kekyo/npmjs-server)
+
+---
+
+## What is this?
+
+A server for storing and distributing npm packages within an organization or for personal use. Standard npm clients can publish, search for, and install packages.
+
+Packages and user information are stored in files, so no database is required. Both scoped and unscoped packages are supported.
+
+A browser-based administration UI lets you browse packages and versions, read READMEs, download packages, upload multiple `.tgz` files, manage users, revoke npm tokens, and configure two-step authentication.
+
+### Key Features
+
+- npm client support, including `npm publish`, `npm install`, `npm search`, and `npm dist-tag`.
+- File-based storage without a database.
+- Three authentication modes: no authentication, authentication for publishing, or authentication for both reading and publishing.
+- Optional two-step authentication per user, with QR registration, authenticator codes, and recovery codes.
+- Read-only upstream npm registry proxying with package caching.
+- Reverse proxy support through a fixed public URL or forwarded headers.
+- Run with Docker or Podman.
+
+## System Requirements
+
+Node.js 20.19.0 or later is required. The administration UI is available in a browser.
+
+## Installation
+
+```bash
+npm install -g npmjs-server
+```
 
 ## Usage
 
 ```bash
-npmjs-server -p 4873 -c ./config.json -d ./packages
+# Start on the default port, 4873
+npmjs-server
+
+# Use a different port
+npmjs-server --port 3000
 ```
 
-Initialize an admin user:
+Open `http://localhost:4873/` in a browser to use the administration UI. Authentication is disabled by default, allowing anyone to read and publish packages. See the documentation to enable authentication.
 
-```bash
-npmjs-server -p 4873 -c ./config.json -d ./packages --auth-init
-```
+## Documentation
 
-Configure npm:
+See the [repository documentation](https://github.com/kekyo/npmjs-server#readme) for npm client setup, storage, configuration, authentication and TOTP recovery, upstream proxying, Docker, and CI usage.
 
-```bash
-npm config set registry http://localhost:4873
-npm login --registry http://localhost:4873
-npm publish --registry http://localhost:4873
-npm install your-package --registry http://localhost:4873
-```
+[日本語のドキュメントはこちら。](https://github.com/kekyo/npmjs-server/blob/develop/README_ja.md)
 
-Enable the read-only upstream proxy when you want cache-on-download behavior for packages that are not fully available locally:
+## Pull Requests
 
-```json
-{
-  "proxy": {
-    "enabled": true,
-    "upstreamRegistry": "https://registry.npmjs.org/",
-    "packageDir": "./proxy-packages"
-  }
-}
-```
+Pull requests are welcome. Please submit them against the `develop` branch.
 
-## Two-step Authentication
+## License
 
-With `authMode` set to `publish` or `full`, users can enable TOTP from "Two-step authentication" in the user menu. Register an authenticator with the displayed QR code and save the ten recovery codes.
-
-UI login and `npm login` then require a second factor. Existing npm tokens continue to work for package operations and CI. The settings screen supports authenticator replacement, recovery code regeneration, and disabling TOTP.
-
-Back up both `users.json` and the encryption key, which defaults to `totp.key` alongside `config.json`. Set `totpKeyFile` or `NPMJS_SERVER_TOTP_KEY_FILE` to change its location.
-If both authentication methods are lost, stop the server and run `npmjs-server --config-file ./config.json --totp-reset <username>` to reset the affected account.
-
-See the [complete TOTP guide](https://github.com/kekyo/npmjs-server/blob/main/README.md#two-step-authentication-totp) for login, key storage, and recovery instructions.
-
-## Supported Registry Operations
-
-- `GET /:package`
-- `GET /:package/:versionOrTag`
-- `GET /:package/-/:tarball`
-- `PUT /:package`
-- `GET /-/v1/search`
-- `GET /-/ping`
-- `GET /-/whoami`
-- `POST /-/v1/login`
-- `PUT /-/user/org.couchdb.user:<username>`
-- `GET`, `PUT`, and `DELETE` dist-tag endpoints
-- no-op npm audit endpoints
-
-Scoped packages are supported through both `@scope/name` and encoded `@scope%2fname` URLs.
-
-## Storage
-
-The registry stores packages directly on disk:
-
-```text
-packages/<packageNamePath>/<version>/package.json
-packages/<packageNamePath>/<version>/metadata.json
-packages/<packageNamePath>/<version>/<tarball>.tgz
-packages/<packageNamePath>/dist-tags.json  # optional, only for non-default dist-tags
-```
-
-Tarball metadata is read with `tar-vern`; the server does not shell out to `tar` and does not extract whole package archives.
-
-The proxy cache uses the same storage layout in a separate directory.
+[MIT License](https://github.com/kekyo/npmjs-server/blob/develop/LICENSE)
