@@ -251,10 +251,13 @@ run_http_smoke_check() {
 
 verify_target_platforms() {
     print_info "Verifying all target platforms..."
+    local platform_image
     while IFS= read -r platform; do
         [ -z "$platform" ] && continue
-        run_binary_load_check "$platform" "$LOCAL_IMAGE"
-        run_http_smoke_check "$platform" "$LOCAL_IMAGE" "target-${platform//\//-}"
+        # A shared manifest tag may resolve to an already cached architecture.
+        platform_image="${LOCAL_IMAGE}-$(platform_to_tag_suffix "$platform")"
+        run_binary_load_check "$platform" "$platform_image"
+        run_http_smoke_check "$platform" "$platform_image" "target-${platform//\//-}"
     done < <(echo "$PLATFORMS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')
     print_info "All target platform checks passed"
 }
@@ -579,9 +582,9 @@ main() {
 
     if [ "$PUSH_TO_REGISTRY" != "true" ]; then
         print_info ""
-        print_info "To test the multi-arch image locally:"
-        print_info "  podman run --platform linux/amd64 -p 4873:4873 ${LOCAL_IMAGE}"
-        print_info "  podman run --platform linux/arm64 -p 4873:4873 ${LOCAL_IMAGE}"
+        print_info "To test the platform images locally:"
+        print_info "  podman run --platform linux/amd64 -p 4873:4873 ${LOCAL_IMAGE}-linux-amd64"
+        print_info "  podman run --platform linux/arm64 -p 4873:4873 ${LOCAL_IMAGE}-linux-arm64"
     fi
 }
 

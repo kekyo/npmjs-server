@@ -14,7 +14,7 @@ import { createFastifyInstance } from '../src/server.ts';
 const execFileAsync = promisify(execFile);
 
 describe('Docker HTTP smoke checks', () => {
-  it('checks npm endpoints through the published registry port', async () => {
+  it('checks each architecture and npm endpoints through the registry port', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'npmjs-server-smoke-'));
     const locker = createReaderWriterLock();
     const server = await createFastifyInstance(
@@ -37,9 +37,19 @@ describe('Docker HTTP smoke checks', () => {
         join(directory, 'podman'),
         `#!/usr/bin/env node
 const assert = require('node:assert/strict');
+const { existsSync, readFileSync, writeFileSync } = require('node:fs');
+const { join } = require('node:path');
 const args = process.argv.slice(2);
+const imageFile = (image) => join(process.env.TEST_IMAGE_DIRECTORY, encodeURIComponent(image));
 switch (args[0]) {
   case 'run':
+    if (args.includes('--platform') && (args.includes('-d') || args.includes('--entrypoint'))) {
+      const platform = args[args.indexOf('--platform') + 1];
+      const image = args.includes('--entrypoint') ? args[args.indexOf('--entrypoint') + 2] : args.at(-1);
+      // Podman may reuse the first cached architecture for the shared manifest tag.
+      const actualPlatform = existsSync(imageFile(image)) ? readFileSync(imageFile(image), 'utf8') : 'linux/amd64';
+      assert.equal(actualPlatform, platform, 'The smoke check must run the requested architecture');
+    }
     if (args.includes('-d')) {
       assert.equal(args[args.indexOf('-p') + 1], '127.0.0.1::4873');
       console.log('smoke-container');
@@ -61,6 +71,8 @@ switch (args[0]) {
     }
     break;
   case 'build':
+    writeFileSync(imageFile(args[args.indexOf('--tag') + 1]), args[args.indexOf('--platform') + 1]);
+    break;
   case 'tag':
   case 'rm':
   case 'logs':
@@ -76,21 +88,23 @@ switch (args[0]) {
         [
           resolve('build-docker-multiplatform.sh'),
           '--skip-app-build',
-          '--skip-target-verify',
           '--platforms',
-          'linux/amd64',
+          'linux/amd64,linux/arm64',
         ],
         {
           env: {
             ...process.env,
             PATH: `${directory}${delimiter}${process.env.PATH ?? ''}`,
             PUSH_TO_REGISTRY: 'false',
+            VERIFY_TARGET_PLATFORMS: 'true',
             VERIFY_HOST_IMAGE: 'true',
+            TEST_IMAGE_DIRECTORY: directory,
             TEST_REGISTRY_PORT: address.port,
           },
           timeout: 20_000,
         }
       );
+      expect(stdout).toContain('All target platform checks passed');
       expect(stdout).toContain('Host image check passed');
       expect(stdout).toContain('Multi-platform build completed successfully!');
     } finally {
