@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type BuildOptions } from 'vite';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 import react from '@vitejs/plugin-react';
@@ -21,6 +21,16 @@ const devConfig: ServerConfig = {
 ////////////////////////////////////////////////////////////////////
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
+
+const buildLogOptions: NonNullable<BuildOptions['rolldownOptions']> = {
+  onLog: (level, log, handler) => {
+    // Formatting and full TypeScript validation intentionally dominate these small bundles.
+    if (log.code === 'PLUGIN_TIMINGS' && log.message.includes('prettier-max')) {
+      return;
+    }
+    handler(level, log);
+  },
+};
 
 export default defineConfig(({ mode, command }) => {
   const isDev = mode === 'development';
@@ -54,6 +64,7 @@ export default defineConfig(({ mode, command }) => {
         emptyOutDir: true,
         chunkSizeWarningLimit: 10000,
         rollupOptions: {
+          ...buildLogOptions,
           input: {
             index: resolve(__dirname, 'src/ui/index.html'),
             login: resolve(__dirname, 'src/ui/login.html'),
@@ -85,6 +96,7 @@ export default defineConfig(({ mode, command }) => {
         emptyOutDir: false, // Don't clean server build files
         chunkSizeWarningLimit: 10000,
         rollupOptions: {
+          ...buildLogOptions,
           input: {
             index: resolve(__dirname, 'src/ui/index.html'),
             login: resolve(__dirname, 'src/ui/login.html'),
@@ -121,17 +133,7 @@ export default defineConfig(({ mode, command }) => {
         formats: ['es'],
       },
       rolldownOptions: {
-        onLog: (level, log, handler) => {
-          // Formatting and full TypeScript validation intentionally dominate this small server bundle.
-          if (
-            log.code === 'PLUGIN_TIMINGS' &&
-            log.message.includes('prettier-max')
-          ) {
-            return;
-          } else {
-            handler(level, log);
-          }
-        },
+        ...buildLogOptions,
         external: [
           'commander',
           'fs/promises',

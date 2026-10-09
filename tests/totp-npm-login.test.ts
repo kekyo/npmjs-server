@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createReaderWriterLock } from 'async-primitives';
 import type { FastifyInstance } from 'fastify';
 import { TOTP } from 'otpauth';
@@ -150,6 +152,69 @@ describe('TOTP during npm token issuance', () => {
     });
     expect(ui.statusCode).toBe(429);
   });
+
+  it('supports the npm CLI legacy login OTP prompt', async () => {
+    const directory = await createTestDirectory(
+      'totp-npm-cli',
+      'legacy OTP prompt'
+    );
+    const registry = await app.listen({ host: '127.0.0.1', port: 0 });
+    const env = {
+      ...process.env,
+      NPM_CONFIG_USERCONFIG: join(directory, '.npmrc'),
+      NPM_CONFIG_CACHE: join(directory, 'cache'),
+    };
+    const responses = [
+      { prompt: 'Username:', input: 'alice\n' },
+      { prompt: 'Password:', input: `${password}\n` },
+      { prompt: 'Enter OTP:', input: `${new TOTP({ secret }).generate()}\n` },
+    ];
+    // npm requires a terminal before it prompts for the second factor.
+    const child = spawn(
+      'script',
+      [
+        '-qec',
+        `npm login --auth-type=legacy --registry ${registry}`,
+        '/dev/null',
+      ],
+      {
+        cwd: directory,
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }
+    );
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let output = '';
+        let next = 0;
+        const receive = (chunk: Buffer) => {
+          output += chunk.toString();
+          while (
+            next < responses.length &&
+            output.includes(responses[next]!.prompt)
+          ) {
+            child.stdin.write(responses[next]!.input);
+            next++;
+          }
+        };
+        child.stdout.on('data', receive);
+        child.stderr.on('data', receive);
+        child.on('error', reject);
+        child.on('close', (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`npm login failed: ${output}`));
+        });
+      });
+      const whoami = await promisify(execFile)(
+        'npm',
+        ['whoami', '--registry', registry],
+        { cwd: directory, env }
+      );
+      expect(whoami.stdout.trim()).toBe('alice');
+    } finally {
+      if (child.exitCode === null) child.kill('SIGTERM');
+    }
+  }, 30_000);
 
   it.each([false, true])(
     'keeps web login pending until a second factor succeeds (recovery: %s)',
