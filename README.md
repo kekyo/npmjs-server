@@ -1,6 +1,6 @@
 # npmjs-server
 
-A simple private npm registry running on Node.js.
+A simple private NPM registry running on Node.js.
 
 ![npmjs-server](./images/npmjs-server-120.png)
 
@@ -9,13 +9,17 @@ A simple private npm registry running on Node.js.
 [![npm version](https://img.shields.io/npm/v/npmjs-server.svg)](https://www.npmjs.com/package/npmjs-server)
 [![Docker Image Version](https://img.shields.io/docker/v/kekyo/npmjs-server.svg?label=docker)](https://hub.docker.com/r/kekyo/npmjs-server)
 
-[日本語のドキュメントはこちら。](./README_ja.md)
-
 ---
+
+[(For Japanese language/日本語はこちら)](./README_ja.md)
+
+> Please note that this English version of the document was machine-translated and then partially edited, so it may contain inaccuracies.
+> We welcome pull requests to correct any errors in the text.
 
 ## What is this?
 
-A server for storing and distributing npm packages within an organization or for personal use. Standard npm clients can publish, search for, and install packages.
+A server for storing and distributing NPM packages within an organization or for personal use.
+Standard npm clients can publish, search for, and install packages.
 
 Packages and user information are stored in files, so no database is required. Both scoped and unscoped packages are supported.
 
@@ -42,6 +46,8 @@ A browser-based administration UI is also provided:
 Node.js 20.19.0 or later is required. The administration UI is available in a browser.
 
 When running a container, you do not need to install Node.js on the host. See [Using Docker](#using-docker).
+
+---
 
 ## Installation
 
@@ -123,15 +129,18 @@ npm publish ./example-package-1.0.0.tgz --registry http://localhost:4873/
 
 In the administration UI, open "Upload Package" to select files or drag and drop multiple `.tgz` files.
 
-If the same package name and version already exist, the server keeps the existing package by default. Set `duplicatePackagePolicy` to `overwrite` to replace it, `ignore` to keep it, or `error` to reject the upload.
+If the same package name and version already exist, the server keeps the existing package by default.
+Set `duplicatePackagePolicy` to `overwrite` to replace it, `ignore` to keep it, or `error` to reject the upload.
 
-The default upload request limit is 100 MB. Change it with `maxUploadSizeMb`. Because `npm publish` embeds the archive as Base64 in JSON, the limit must accommodate a request larger than the archive itself.
+The default upload request limit is 100 MB. Change it with `maxUploadSizeMb`.
+Because `npm publish` embeds the archive as Base64 in JSON, the limit must accommodate a request larger than the archive itself.
 
 ## Package Storage Configuration
 
 ### Storage Location
 
-By default, packages are stored in `./packages` relative to the working directory. Change this with `--package-dir`, the `NPMJS_SERVER_PACKAGE_DIR` environment variable, or `packageDir` in `config.json`.
+By default, packages are stored in `./packages` relative to the working directory.
+Change this with `--package-dir`, the `NPMJS_SERVER_PACKAGE_DIR` environment variable, or `packageDir` in `config.json`.
 
 ```bash
 npmjs-server --package-dir /srv/npmjs-server/packages
@@ -156,7 +165,9 @@ packages/
       dist-tags.json
 ```
 
-Archives and package information are stored per version. `dist-tags.json` is created when tags are explicitly saved. Packages fetched through the proxy are stored separately in `proxy.packageDir`.
+Archives and package information are stored per version.
+`dist-tags.json` is created when tags are explicitly saved.
+Packages fetched through the proxy are stored separately in `proxy.packageDir`.
 
 ### Backup and Restore
 
@@ -168,11 +179,13 @@ Stop the server, then back up the following files and directories together:
 - `totp.key` if two-step authentication is enabled.
 - `proxy.packageDir` if you want to preserve the proxy cache.
 
-To restore a backup, stop the server, restore the files, check the configured paths and permissions, and restart. Include any custom storage locations in your backup. Both the user information and the encryption key are required for enrolled TOTP accounts.
+To restore a backup, stop the server, restore the files, check the configured paths and permissions, and restart.
+Include any custom storage locations in your backup. Both the user information and the encryption key are required for enrolled TOTP accounts.
 
 ## Configuration
 
-Settings take precedence in this order: CLI options, environment variables, `config.json`, and defaults. Some settings are available through only certain methods. See the [Configuration Reference Table](#configuration-reference-table).
+Settings take precedence in this order: CLI options, environment variables, `config.json`, and defaults.
+Some settings are available through only certain methods. See the [Configuration Reference Table](#configuration-reference-table).
 
 If `config.json` does not exist, the server uses defaults. It does not create a configuration file automatically.
 
@@ -187,11 +200,13 @@ npmjs-server --config-file /srv/npmjs-server/data/config.json
 NPMJS_SERVER_CONFIG_FILE=/srv/npmjs-server/data/config.json npmjs-server
 ```
 
-Relative paths inside the configuration file are resolved against the directory containing `config.json`. Relative paths supplied through CLI options or environment variables use the working directory.
+Relative paths inside the configuration file are resolved against the directory containing `config.json`.
+Relative paths supplied through CLI options or environment variables use the working directory.
 
 ### config.json Structure
 
-All settings are optional. The following example requires authentication for publishing. Create an administrator as described under [Initialization](#initialization) before starting the server.
+All settings are optional. The following example requires authentication for publishing.
+Create an administrator as described under [Initialization](#initialization) before starting the server.
 
 ```json
 {
@@ -226,7 +241,8 @@ Use `authMode` to control access to packages:
 | `publish` | No authentication | Requires the `publish` or `admin` role |
 | `full` | Login required | Requires the `publish` or `admin` role |
 
-Login pages and health checks remain accessible without authentication in `full` mode. Administrative operations, such as user management, require login and the appropriate permissions.
+Login pages and health checks remain accessible without authentication in `full` mode.
+Administrative operations, such as user management, require login and the appropriate permissions.
 
 ### Initialization
 
@@ -236,9 +252,11 @@ Create the first administrator account:
 npmjs-server --config-file ./config.json --auth-init
 ```
 
-Enter the username, password, and password confirmation when prompted. By default, `users.json` is created next to `config.json`. An existing user file is not overwritten.
+Enter the username, password, and password confirmation when prompted. By default, `users.json` is created next to `config.json`.
+An existing user file is not overwritten.
 
-This command exits after creating the account. It does not change the authentication mode or start the server. Set `authMode` in the configuration file or start the server as follows:
+This command exits after creating the account. It does not change the authentication mode or start the server.
+Set `authMode` in the configuration file or start the server as follows:
 
 ```bash
 npmjs-server --config-file ./config.json --auth-mode publish
@@ -270,7 +288,8 @@ Administrators can add or delete users and reset their passwords through the adm
 | `publish` | All `read` operations, plus publishing packages and changing tags |
 | `admin` | All `publish` operations, plus user management |
 
-Roles apply across the registry. Package-specific, organization, and team permissions are not supported. `npm login` does not create accounts; an administrator must register users beforehand.
+Roles apply across the registry. Package-specific, organization, and team permissions are not supported.
+`npm login` does not create accounts; an administrator must register users beforehand.
 
 ### Two-step Authentication (TOTP)
 
@@ -282,17 +301,25 @@ When `authMode` is `publish` or `full`, each user can enable two-step authentica
 4. Enter the six-digit code from the app to enable two-step authentication.
 5. Save the ten recovery codes somewhere safe. They cannot be displayed again after you close this screen.
 
-The QR code is generated locally in the browser. Use an authenticator app supporting TOTP as defined in [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238.html), with SHA-1, six digits, and a 30-second interval.
+The QR code is generated locally in the browser.
+Use an authenticator app supporting TOTP as defined in [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238.html), with SHA-1, six digits, and a 30-second interval.
 
-Once enabled, login requires both your password and an authenticator code. A code cannot be reused; wait for the next code before authenticating again.
-The verification challenge expires after five minutes and allows five attempts. Repeated failures trigger per-user and per-IP limits of up to ten minutes.
+Once enabled, login requires both your password and an authenticator code.
+A code cannot be reused; wait for the next code before authenticating again.
+The verification challenge expires after five minutes and allows five attempts.
+Repeated failures trigger per-user and per-IP limits of up to ten minutes.
 Keep the server and authenticator clocks synchronized, and use HTTPS for public deployments.
 
-If you lose your device, select "Use a recovery code" on the verification screen. Each recovery code can be used once. Registering a replacement authenticator after login requires another unused authenticator or recovery code.
+If you lose your device, select "Use a recovery code" on the verification screen.
+Each recovery code can be used once. Registering a replacement authenticator after login requires another unused authenticator or recovery code.
 
-The two-step authentication settings let you replace the authenticator, regenerate recovery codes, or disable two-step authentication. Each operation requires your current password and an unused authenticator or recovery code.
-During replacement, the current authenticator remains active until you verify a code from the new one. Completing registration or regenerating recovery codes invalidates the previous recovery codes.
-Confirming a settings change invalidates sessions other than the browser performing the change. An administrator's password reset preserves the user's TOTP enrollment.
+The two-step authentication settings let you replace the authenticator, regenerate recovery codes, or disable two-step authentication.
+Each operation requires your current password and an unused authenticator or recovery code.
+During replacement, the current authenticator remains active until you verify a code from the new one.
+
+Completing registration or regenerating recovery codes invalidates the previous recovery codes.
+Confirming a settings change invalidates sessions other than the browser performing the change.
+An administrator's password reset preserves the user's TOTP enrollment.
 
 Users with two-step authentication enabled also enter an authenticator or recovery code on the `npm login` web page.
 For `npm login --auth-type=legacy`, follow npm's code prompt or supply the code with `--otp`.
@@ -302,10 +329,13 @@ Existing npm tokens continue to work for `npm publish`, `npm install`, and CI wi
 #### Key Storage and Recovery
 
 The first enrollment creates the encryption key `totp.key` next to `config.json`.
-Override its location with `totpKeyFile` in `config.json` or the `NPMJS_SERVER_TOTP_KEY_FILE` environment variable. The environment variable takes precedence.
-Relative configuration paths are resolved against the directory containing `config.json`. Use an absolute environment-variable path to avoid depending on the working directory. Create the parent directory in advance.
+Override its location with `totpKeyFile` in `config.json` or the `NPMJS_SERVER_TOTP_KEY_FILE` environment variable.
+The environment variable takes precedence.
+Relative configuration paths are resolved against the directory containing `config.json`.
+Use an absolute environment-variable path to avoid depending on the working directory. Create the parent directory in advance.
 
-TOTP secrets are encrypted in `users.json`, and only hashes of recovery codes are stored. Back up both `users.json` and `totp.key`, and restrict access to the key. Persist the key in a volume when using containers.
+TOTP secrets are encrypted in `users.json`, and only hashes of recovery codes are stored.
+Back up both `users.json` and `totp.key`, and restrict access to the key. Persist the key in a volume when using containers.
 The session `sessionSecret` cannot replace this encryption key. Sharing one user file between multiple running server processes is not supported.
 
 If neither the authenticator nor recovery codes are available, a server administrator can reset a user's TOTP after stopping the server:
@@ -315,22 +345,31 @@ npmjs-server --config-file ./config.json --totp-reset alice
 ```
 
 This command does not detect whether the server is stopped. Confirm that it is stopped before running the command.
-It removes the selected user's TOTP enrollment and recovery codes while preserving their password, npm tokens, and other users. After restarting, log in with the password and register an authenticator again.
+It removes the selected user's TOTP enrollment and recovery codes while preserving their password, npm tokens, and other users.
+After restarting, log in with the password and register an authenticator again.
 
-If the encryption key is missing or changed while users have TOTP enabled, the server refuses to start. Restore the original key from backup.
-If that is impossible, reset every enrolled user with the command above. Resetting does not require the encryption key. If a damaged key file remains, remove it after resetting all enrolled users, then restart.
+If the encryption key is missing or changed while users have TOTP enabled, the server refuses to start.
+Restore the original key from backup.
+If that is impossible, reset every enrolled user with the command above.
+Resetting does not require the encryption key.
+If a damaged key file remains, remove it after resetting all enrolled users, then restart.
 
 ### Using npm Tokens
 
-A successful `npm login` stores a token in the npm client. Subsequent publish and download requests use this token. See the [official npm login documentation](https://docs.npmjs.com/cli/v11/commands/npm-login/) for login options.
+A successful `npm login` stores a token in the npm client.
+Subsequent publish and download requests use this token.
+See the [official npm login documentation](https://docs.npmjs.com/cli/v11/commands/npm-login/) for login options.
 
-Each login issues a token, with a maximum of 50 per user. Open "npm tokens" from the administration UI's user menu to see your tokens, their creation dates, and their last usage, and to revoke tokens you no longer need. Revocation takes effect immediately. Token values cannot be displayed again in the UI.
+Each login issues a token, with a maximum of 50 per user.
+Open "npm tokens" from the administration UI's user menu to see your tokens, their creation dates, and their last usage, and to revoke tokens you no longer need.
+Revocation takes effect immediately. Token values cannot be displayed again in the UI.
 
 For CI, store an issued token as a CI secret and configure it as described under [Non-interactive Mode (CI/CD)](#non-interactive-mode-cicd).
 
 ### Password Strength Requirements
 
-By default, passwords are rated from 0 to 4 for resistance to guessing, and a score of at least 2 is required. Set the minimum with `passwordMinScore`, and enable or disable the check with `passwordStrengthCheck`.
+By default, passwords are rated from 0 to 4 for resistance to guessing, and a score of at least 2 is required.
+Set the minimum with `passwordMinScore`, and enable or disable the check with `passwordStrengthCheck`.
 
 ```json
 {
@@ -343,7 +382,8 @@ Passwords must contain at least four characters even when strength checking is d
 
 ## Upstream npm Registry Proxy
 
-Fetch packages from an upstream registry, such as npmjs.org, and distribute them through this server. The proxy is disabled by default.
+Fetch packages from an upstream registry, such as npmjs.org, and distribute them through this server.
+The proxy is disabled by default.
 
 ### Enabling the Proxy
 
@@ -367,11 +407,16 @@ npmjs-server --proxy --proxy-upstream-registry https://registry.npmjs.org
 
 ### Proxy Behavior
 
-Package metadata combines local and upstream information. Local versions and tags take precedence when both sources contain the same entry. Packages published with `npm publish` are not forwarded upstream.
+Package metadata combines local and upstream information. Local versions and tags take precedence when both sources contain the same entry.
+Packages published with `npm publish` are not forwarded upstream.
 
-Downloaded archives are stored in `proxy.packageDir`, separately from the regular `packageDir`. The default is `proxy-packages` next to `config.json`. Cached packages remain available when the upstream registry cannot be reached. Versions that have not been fetched require an upstream connection.
+Downloaded archives are stored in `proxy.packageDir`, separately from the regular `packageDir`.
+The default is `proxy-packages` next to `config.json`.
+Cached packages remain available when the upstream registry cannot be reached.
+Versions that have not been fetched require an upstream connection.
 
-The administration UI's package list and `npm search` cover locally published packages. The server does not search the entire upstream registry or mirror it in bulk.
+The administration UI's package list and `npm search` cover locally published packages.
+The server does not search the entire upstream registry or mirror it in bulk.
 
 ### Example Session
 
@@ -388,15 +433,21 @@ In `full` mode, log in to this server first.
 
 Enabling the proxy lets you centralize the npm registry used within your internal network, but one issue remains.
 
-When you use npm, `package-lock.json` records the URL from which each package was downloaded in its `resolved` field. Installing packages from a private registry with commands such as `npm install` therefore stores private registry URLs in the lockfile. Committing that file to Git may expose those URLs.
+When you use npm, `package-lock.json` records the URL from which each package was downloaded in its `resolved` field.
+Installing packages from a private registry with commands such as `npm install` therefore stores private registry URLs in the lockfile.
+Committing that file to Git may expose those URLs.
 
-The lockfile also stores a content hash in the `integrity` field to verify the package archive. See the [npm lockfile documentation](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/#packages) for details. For packages available through the configured registry, npm can use this hash to verify their contents without retaining the original download URL.
+The lockfile also stores a content hash in the `integrity` field to verify the package archive.
+See the [npm lockfile documentation](https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json/#packages) for details.
+For packages available through the configured registry, npm can use this hash to verify their contents without retaining the original download URL.
 
-Use [resolved-killer](https://github.com/kekyo/resolved-killer/) to remove these URLs from `package-lock.json` while preserving integrity verification. This prevents private registry URLs from being exposed through the lockfile's `resolved` fields while allowing npm to verify the downloaded packages.
+Use [resolved-killer](https://github.com/kekyo/resolved-killer/) to remove these URLs from `package-lock.json` while preserving integrity verification.
+This prevents private registry URLs from being exposed through the lockfile's `resolved` fields while allowing npm to verify the downloaded packages.
 
 ## Reverse Proxy Interoperability
 
-You can use a reverse proxy for TLS termination or public access. If the public URL is fixed, set `baseUrl` to the URL used by browsers and npm clients.
+You can use a reverse proxy for TLS termination or public access.
+If the public URL is fixed, set `baseUrl` to the URL used by browsers and npm clients.
 
 ### URL Resolution
 
@@ -419,13 +470,17 @@ Configure clients with the same public URL:
 npm config set registry https://packages.example.com/
 ```
 
-Set `trustedProxies` to the IP addresses of the proxies you use. CLI options and environment variables accept a comma-separated list; JSON uses an array of strings. URL generation also consults forwarded headers when this setting is omitted.
+Set `trustedProxies` to the IP addresses of the proxies you use. CLI options and environment variables accept a comma-separated list; JSON uses an array of strings.
+URL generation also consults forwarded headers when this setting is omitted.
 
-For HTTPS deployments, set `baseUrl` to an `https://` URL. This setting controls the `Secure` attribute on browser session cookies. Configure the reverse proxy's upload limit to accommodate the server's `maxUploadSizeMb` as well.
+For HTTPS deployments, set `baseUrl` to an `https://` URL.
+This setting controls the `Secure` attribute on browser session cookies.
+Configure the reverse proxy's upload limit to accommodate the server's `maxUploadSizeMb` as well.
 
 ## Using Docker
 
-The container image starts on port 4873 and stores packages in `/packages` and configuration and authentication data in `/data`. It can run with Docker or Podman.
+The container image starts on port 4873 and stores packages in `/packages` and configuration and authentication data in `/data`.
+It can run with Docker or Podman.
 
 ### Quick Start
 
@@ -465,7 +520,8 @@ docker compose up -d
 
 The container runs as UID/GID 1001. Grant this user read and write access to the mounted host directories.
 
-Rootless Podman maps container UIDs to different host UIDs. To change ownership, use [podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html) to operate within the user namespace:
+Rootless Podman maps container UIDs to different host UIDs.
+To change ownership, use [podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html) to operate within the user namespace:
 
 ```bash
 podman unshare chown -R 1001:1001 data packages
@@ -504,13 +560,16 @@ docker run --rm -p 4873:4873 \
 
 Persist both `/data` and `/packages`. If you move the TOTP key elsewhere, persist that location too.
 
-The image's default command specifies `--config-file /data/config.json --package-dir /packages`. These CLI options override environment variables and JSON settings. To use different locations, change both the mounts and the startup command supplied after the image name.
+The image's default command specifies `--config-file /data/config.json --package-dir /packages`.
+These CLI options override environment variables and JSON settings.
+To use different locations, change both the mounts and the startup command supplied after the image name.
 
 ### Automatic Startup with systemd
 
 With Podman and systemd, you can manage the container using [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html).
 
-This example uses a root-managed service. First create `/srv/npmjs-server/data` and `/srv/npmjs-server/packages`, grant UID/GID 1001 access, and initialize an administrator using that same `data` directory.
+This example uses a root-managed service.
+First create `/srv/npmjs-server/data` and `/srv/npmjs-server/packages`, grant UID/GID 1001 access, and initialize an administrator using that same `data` directory.
 
 Create `/etc/containers/systemd/npmjs-server.container`:
 
@@ -549,7 +608,8 @@ Use the repository's build script to create container images from source.
 
 ### Multi-platform Builds with Podman (Recommended)
 
-Node.js, npm, Podman, `jq`, and `curl` are required. Configure QEMU emulation to build for architectures other than the host architecture.
+Node.js, npm, Podman, `jq`, and `curl` are required.
+Configure QEMU emulation to build for architectures other than the host architecture.
 
 Run these commands from the repository root:
 
@@ -566,17 +626,22 @@ npm install
 ./build-docker-multiplatform.sh --node-image node:24-trixie-slim
 ```
 
-The script builds the application and checks that the image starts on each architecture. It does not push to a registry by default. Run `./build-docker-multiplatform.sh --help` for available options.
+The script builds the application and checks that the image starts on each architecture.
+It does not push to a registry by default.
+Run `./build-docker-multiplatform.sh --help` for available options.
 
 ## Notes
 
 ### Test Environment
 
-Package publishing, retrieval, and authentication have been tested with Node.js 24 and the npm client on Linux. The administration UI has been tested in Chromium, and containers on `linux/amd64` and `linux/arm64`. QEMU is used for non-native containers.
+Package publishing, retrieval, and authentication have been tested with Node.js 24 and the npm client on Linux.
+The administration UI has been tested in Chromium, and containers on `linux/amd64` and `linux/arm64`.
+QEMU is used for non-native containers.
 
 ### Supported npm Registry API Endpoints
 
-The following npm registry operations are supported. The `:package` parameter also accepts scoped package names.
+The following npm registry operations are supported.
+The `:package` parameter also accepts scoped package names.
 
 | Method | Path | Operation |
 | --- | --- | --- |
@@ -595,13 +660,17 @@ The following npm registry operations are supported. The `:package` parameter al
 
 Additional endpoints include `POST /api/publish` for direct `.tgz` uploads and `GET /health` for health checks.
 
-Unpublish, deprecate, provenance, and organization or team management are not supported. The audit endpoints `/-/npm/v1/security/advisories/bulk` and `/-/npm/v1/security/audits/quick` return empty results. They do not scan for vulnerabilities or forward audit requests upstream, so an `npm audit` result from this server does not establish whether packages have vulnerabilities.
+Unpublish, deprecate, provenance, and organization or team management are not supported.
+The audit endpoints `/-/npm/v1/security/advisories/bulk` and `/-/npm/v1/security/audits/quick` return empty results.
+They do not scan for vulnerabilities or forward audit requests upstream, so an `npm audit` result from this server does not establish whether packages have vulnerabilities.
 
 ### Non-interactive Mode (CI/CD)
 
-For CI, use a token obtained beforehand through `npm login`. Store it as a CI secret and expose it through the `NPM_TOKEN` environment variable.
+For CI, use a token obtained beforehand through `npm login`.
+Store it as a CI secret and expose it through the `NPM_TOKEN` environment variable.
 
-Reference the environment variable in the project's `.npmrc`. Keep the token value out of this file and supply it through the CI secret:
+Reference the environment variable in the project's `.npmrc`.
+Keep the token value out of this file and supply it through the CI secret:
 
 ```ini
 registry=https://packages.example.com/
@@ -610,30 +679,39 @@ registry=https://packages.example.com/
 
 See the [official .npmrc documentation](https://docs.npmjs.com/cli/v11/configuring-npm/npmrc/) for environment variable substitution and authentication scope.
 
-`--auth-init` requires interactive input. Use an account and token prepared in advance for CI. Tokens belonging to users with TOTP enabled also work without verification codes.
+`--auth-init` requires interactive input. Use an account and token prepared in advance for CI.
+Tokens belonging to users with TOTP enabled also work without verification codes.
 
 ### Session Security
 
-Browser session cookies use `HttpOnly` and `SameSite=Strict`. They also use `Secure` when `baseUrl` uses HTTPS. Sessions normally last 24 hours, or seven days when the user chooses to stay logged in.
+Browser session cookies use `HttpOnly` and `SameSite=Strict`. They also use `Secure` when `baseUrl` uses HTTPS.
+Sessions normally last 24 hours, or seven days when the user chooses to stay logged in.
 
-If `sessionSecret` is omitted, a random value is generated at each startup. To set a fixed value, provide a sufficiently random ASCII string of at least 32 characters through an environment variable or the configuration file. For example, generate one with OpenSSL:
+If `sessionSecret` is omitted, a random value is generated at each startup. To set a fixed value, provide a sufficiently random ASCII string of at least 32 characters through an environment variable or the configuration file.
+For example, generate one with OpenSSL:
 
 ```bash
 export NPMJS_SERVER_SESSION_SECRET="$(openssl rand -base64 32)"
 npmjs-server
 ```
 
-To keep using a fixed value, save the generated secret securely and supply the same value next time. Browser login state is also held in server memory, so users must log in again after a restart even with a fixed secret. npm tokens are stored in the user file and remain valid across restarts.
+To keep using a fixed value, save the generated secret securely and supply the same value next time.
+Browser login state is also held in server memory, so users must log in again after a restart even with a fixed secret.
+npm tokens are stored in the user file and remain valid across restarts.
 
-Failed password authentication incurs progressive delays. Configure them with `NPMJS_SERVER_AUTH_FAILURE_DELAY_ENABLED` and `NPMJS_SERVER_AUTH_FAILURE_MAX_DELAY`. TOTP attempt limits apply separately.
+Failed password authentication incurs progressive delays.
+Configure them with `NPMJS_SERVER_AUTH_FAILURE_DELAY_ENABLED` and `NPMJS_SERVER_AUTH_FAILURE_MAX_DELAY`.
+TOTP attempt limits apply separately.
 
 ### Requests for Missing Packages
 
-The server returns HTTP 404 when the requested package, version, or archive is not found. When the proxy is enabled, it also attempts to retrieve the package from the upstream registry.
+The server returns HTTP 404 when the requested package, version, or archive is not found.
+When the proxy is enabled, it also attempts to retrieve the package from the upstream registry.
 
 ### Configuration Reference Table
 
-Settings take precedence in this order: CLI, environment variables, `config.json`, and defaults. `<configDir>` denotes the directory containing the configuration file. A `—` means that the setting is not available through that method.
+Settings take precedence in this order: CLI, environment variables, `config.json`, and defaults. `<configDir>` denotes the directory containing the configuration file.
+A `—` means that the setting is not available through that method.
 
 | CLI option | Environment variable | config.json key | Description and valid values | Default |
 | --- | --- | --- | --- | --- |
@@ -662,9 +740,12 @@ Settings take precedence in this order: CLI, environment variables, `config.json
 | `-h, --help` | — | — | Show help | — |
 | `-V, --version` | — | — | Show version | — |
 
+---
+
 ## Additional Information
 
-This npm registry is based on [nuget-server](https://github.com/kekyo/nuget-server/). It also shares administration UI and authentication features with [uplodah](https://github.com/kekyo/uplodah/).
+This npm registry is based on [nuget-server](https://github.com/kekyo/nuget-server/).
+It also shares administration UI and authentication features with [uplodah](https://github.com/kekyo/uplodah/).
 
 ## Pull Requests
 
@@ -672,4 +753,4 @@ Pull requests are welcome. Please submit them against the `develop` branch.
 
 ## License
 
-[MIT License](./LICENSE)
+Under MIT.

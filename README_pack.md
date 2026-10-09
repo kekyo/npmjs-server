@@ -1,6 +1,6 @@
 # npmjs-server
 
-A simple private npm registry running on Node.js.
+A simple private NPM registry running on Node.js.
 
 ![npmjs-server](./images/npmjs-server-120.png)
 
@@ -12,7 +12,7 @@ A simple private npm registry running on Node.js.
 
 ## What is this?
 
-A server for storing and distributing npm packages within an organization or for personal use. Standard npm clients can publish, search for, and install packages.
+A server for storing and distributing NPM packages within an organization or for personal use. Standard npm clients can publish, search for, and install packages.
 
 Packages and user information are stored in files, so no database is required. Both scoped and unscoped packages are supported.
 
@@ -32,6 +32,8 @@ A browser-based administration UI lets you browse packages and versions, read RE
 
 Node.js 20.19.0 or later is required. The administration UI is available in a browser.
 
+---
+
 ## Installation
 
 ```bash
@@ -50,11 +52,11 @@ npmjs-server --port 3000
 
 Open `http://localhost:4873/` in a browser to use the administration UI. Authentication is disabled by default, allowing anyone to read and publish packages. See the documentation to enable authentication.
 
+---
+
 ## Documentation
 
 See the [repository documentation](https://github.com/kekyo/npmjs-server#readme) for npm client setup, storage, configuration, authentication and TOTP recovery, upstream proxying, Docker, and CI usage.
-
-[日本語のドキュメントはこちら。](https://github.com/kekyo/npmjs-server/blob/develop/README_ja.md)
 
 ## Pull Requests
 
@@ -62,4 +64,4 @@ Pull requests are welcome. Please submit them against the `develop` branch.
 
 ## License
 
-[MIT License](https://github.com/kekyo/npmjs-server/blob/develop/LICENSE)
+Under MIT.
