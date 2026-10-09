@@ -3,9 +3,9 @@
 // License under MIT.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { User, UserService } from '../../services/userService';
-import type { SessionService } from '../../services/sessionService';
-import type { TotpService } from '../../services/totpService';
+import type { User, UserService } from '../../services/userService.ts';
+import type { SessionService } from '../../services/sessionService.ts';
+import type { TotpService } from '../../services/totpService.ts';
 
 /**
  * Registers browser-only second-factor endpoints.

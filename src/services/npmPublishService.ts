@@ -4,7 +4,7 @@
 
 import fs from 'fs/promises';
 import path from 'path';
-import { DuplicatePackagePolicy, Logger } from '../types';
+import type { DuplicatePackagePolicy, Logger } from '../types.ts';
 import {
   calculateDist,
   createTarballFileName,
@@ -12,12 +12,12 @@ import {
   extractNpmTarball,
   isValidPackageName,
   packageNameToPathSegments,
-} from '../utils/npmPackage';
-import {
+} from '../utils/npmPackage.ts';
+import type {
   MetadataService,
   PackageDistTags,
   PackageEntry,
-} from './metadataService';
+} from './metadataService.ts';
 
 /**
  * Result of publishing an npm tarball.

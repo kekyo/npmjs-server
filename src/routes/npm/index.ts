@@ -3,37 +3,37 @@
 // License under MIT.
 
 import { randomUUID } from 'crypto';
-import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ReaderWriterLock } from 'async-primitives';
-import { Logger } from '../../types';
-import {
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { ReaderWriterLock } from 'async-primitives';
+import type { Logger } from '../../types.ts';
+import type {
   MetadataService,
   PackageDistTags,
   PackageVersionMetadata,
-} from '../../services/metadataService';
-import { AuthService } from '../../services/authService';
-import { UserService } from '../../services/userService';
-import type { TotpService } from '../../services/totpService';
-import { createPackageService } from '../../services/packageService';
-import { publishNpmTarball } from '../../services/npmPublishService';
+} from '../../services/metadataService.ts';
+import type { AuthService } from '../../services/authService.ts';
+import type { UserService } from '../../services/userService.ts';
+import type { TotpService } from '../../services/totpService.ts';
+import { createPackageService } from '../../services/packageService.ts';
+import { publishNpmTarball } from '../../services/npmPublishService.ts';
 import {
   createNpmHybridAuthMiddleware,
-  FastifyAuthConfig,
-  AuthenticatedFastifyRequest,
-} from '../../middleware/fastifyAuth';
-import { createUrlResolver } from '../../utils/urlResolver';
+  type FastifyAuthConfig,
+  type AuthenticatedFastifyRequest,
+} from '../../middleware/fastifyAuth.ts';
+import { createUrlResolver } from '../../utils/urlResolver.ts';
 import {
   buildPackageName,
   createTarballFileName,
   decodePackageName,
   encodePackageNameForPath,
   isValidPackageName,
-} from '../../utils/npmPackage';
-import { streamFile } from '../../utils/fileStreaming';
+} from '../../utils/npmPackage.ts';
+import { streamFile } from '../../utils/fileStreaming.ts';
 import {
   isNpmProxyError,
-  NpmProxyService,
-} from '../../services/npmProxyService';
+  type NpmProxyService,
+} from '../../services/npmProxyService.ts';
 
 /**
  * Configuration for npm registry routes.

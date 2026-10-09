@@ -8,14 +8,14 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
-import { Logger } from '../types';
-import { createPackageEntryFromTarball } from './npmPublishService';
-import {
+import type { Logger } from '../types.ts';
+import { createPackageEntryFromTarball } from './npmPublishService.ts';
+import type {
   MetadataService,
   PackageDistTags,
   PackageEntry,
   PackageVersionMetadata,
-} from './metadataService';
+} from './metadataService.ts';
 
 const defaultFetchTimeoutMs = 30_000;
 
