@@ -95,8 +95,6 @@ const ApiPasswordDrawer = ({ open, onClose }: ApiPasswordDrawerProps) => {
       onClose={onClose}
       variant="temporary"
       sx={{
-        width: 440,
-        flexShrink: 0,
         '& .MuiDrawer-paper': {
           width: 440,
           boxSizing: 'border-box',
