@@ -35,6 +35,17 @@ Enable the read-only upstream proxy when you want cache-on-download behavior for
 }
 ```
 
+## Two-step Authentication
+
+With `authMode` set to `publish` or `full`, users can enable TOTP from "Two-step authentication" in the user menu. Register an authenticator with the displayed QR code and save the ten recovery codes.
+
+UI login and `npm login` then require a second factor. Existing npm tokens continue to work for package operations and CI. The settings screen supports authenticator replacement, recovery code regeneration, and disabling TOTP.
+
+Back up both `users.json` and the encryption key, which defaults to `totp.key` alongside `config.json`. Set `totpKeyFile` or `NPMJS_SERVER_TOTP_KEY_FILE` to change its location.
+If both authentication methods are lost, stop the server and run `npmjs-server --config-file ./config.json --totp-reset <username>` to reset the affected account.
+
+See the [complete TOTP guide](https://github.com/kekyo/npmjs-server/blob/main/README.md#two-step-authentication-totp) for login, key storage, and recovery instructions.
+
 ## Supported Registry Operations
 
 - `GET /:package`

@@ -14,6 +14,7 @@ describe('vite fastify development request routing', () => {
   test('should forward npm registry and UI API requests to Fastify', () => {
     expect(isFastifyDevRequest('/api/ui/config')).toBe(true);
     expect(isFastifyDevRequest('/-/whoami')).toBe(true);
+    expect(isFastifyDevRequest('/npm-login/test-flow')).toBe(true);
     expect(isFastifyDevRequest('/@scope/pkg')).toBe(true);
     expect(isFastifyDevRequest('/@scope/pkg?write=true')).toBe(true);
     expect(isFastifyDevRequest('/health')).toBe(true);

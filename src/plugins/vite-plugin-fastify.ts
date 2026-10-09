@@ -50,6 +50,7 @@ export const isFastifyDevRequest = (url: string): boolean => {
   return (
     path.startsWith('/api/') ||
     path.startsWith('/-/') ||
+    path.startsWith('/npm-login/') ||
     path.startsWith('/@') ||
     path === '/health' ||
     path === '/favicon.ico' ||
@@ -136,7 +137,8 @@ export const fastifyHost = (config: ServerConfig): Plugin => {
               if (typeof headers === 'object') {
                 Object.entries(headers).forEach(([key, value]) => {
                   if (value !== undefined) {
-                    res.setHeader(key, String(value));
+                    // Preserve separate Set-Cookie fields when multiple cookies are returned.
+                    res.setHeader(key, value);
                   }
                 });
               }
