@@ -512,7 +512,8 @@ describe('npm registry routes', () => {
     });
     expect(loginResponse.status).toBe(200);
     const sessionCookie = loginResponse.headers
-      .get('set-cookie')
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('sessionToken='))
       ?.split(';')[0];
     expect(sessionCookie).toBeDefined();
 

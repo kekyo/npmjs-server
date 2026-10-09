@@ -121,6 +121,17 @@ export default defineConfig(({ mode, command }) => {
         formats: ['es'],
       },
       rolldownOptions: {
+        onLog: (level, log, handler) => {
+          // Formatting and full TypeScript validation intentionally dominate this small server bundle.
+          if (
+            log.code === 'PLUGIN_TIMINGS' &&
+            log.message.includes('prettier-max')
+          ) {
+            return;
+          } else {
+            handler(level, log);
+          }
+        },
         external: [
           'commander',
           'fs/promises',
@@ -132,6 +143,7 @@ export default defineConfig(({ mode, command }) => {
           'url',
           'events',
           'stream',
+          'stream/promises',
           'buffer',
           'timers',
           'util',
@@ -145,6 +157,7 @@ export default defineConfig(({ mode, command }) => {
           '@fastify/static',
           '@fastify/send',
           'passport-local',
+          'otpauth',
           'readline',
           'glob',
           'path-scurry',

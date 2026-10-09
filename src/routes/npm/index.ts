@@ -13,6 +13,7 @@ import {
 } from '../../services/metadataService';
 import { AuthService } from '../../services/authService';
 import { UserService } from '../../services/userService';
+import type { TotpService } from '../../services/totpService';
 import { createPackageService } from '../../services/packageService';
 import { publishNpmTarball } from '../../services/npmPublishService';
 import {
@@ -41,6 +42,8 @@ export interface NpmRoutesConfig {
   metadataService: MetadataService;
   authService: AuthService;
   userService: UserService;
+  /** Shared second-factor verification and attempt limits for token issuance. */
+  totpService: TotpService;
   authConfig: FastifyAuthConfig;
   packagesRoot: string;
   logger: Logger;
@@ -54,6 +57,8 @@ interface NpmLoginFlow {
   createdAt: number;
   token?: string;
   username?: string;
+  /** Password-verified challenge; no token is issued until it is consumed. */
+  totpChallenge?: string;
 }
 
 type PackumentDocument = Record<string, any>;
@@ -376,6 +381,7 @@ export const registerNpmRoutes = async (
     metadataService,
     authService,
     userService,
+    totpService,
     authConfig,
     packagesRoot,
     logger,
@@ -388,6 +394,20 @@ export const registerNpmRoutes = async (
     ? createPackageService(proxyService.packagesRoot)
     : undefined;
   const loginFlows = new Map<string, NpmLoginFlow>();
+
+  const secondFactorForm = (message: string): string => `<!doctype html>
+<html>
+  <head><meta charset="utf-8"><title>npm login verification</title></head>
+  <body><main>
+    <h1>Two-step authentication</h1>
+    <p>${message}</p>
+    <form method="post">
+      <label>Authenticator or recovery code <input name="code" autocomplete="one-time-code" required maxlength="100" autofocus></label><br>
+      <label><input name="recovery" type="checkbox">Use a recovery code</label><br>
+      <button type="submit">Verify</button>
+    </form>
+  </main></body>
+</html>`;
 
   const getBaseUrl = (request: FastifyRequest): string =>
     urlResolver.resolveUrl(request).baseUrl;
@@ -480,8 +500,17 @@ export const registerNpmRoutes = async (
 
   fastify.get('/npm-login/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!loginFlows.has(id)) {
+    const flow = loginFlows.get(id);
+    reply.header('Cache-Control', 'no-store');
+    if (!flow || Date.now() - flow.createdAt > 10 * 60 * 1000) {
+      totpService.cancel('', flow?.totpChallenge ?? '');
+      loginFlows.delete(id);
       return reply.status(404).type('text/html').send('Login flow not found');
+    }
+    if (flow.totpChallenge) {
+      return reply
+        .type('text/html')
+        .send(secondFactorForm('Enter the code from your authenticator app.'));
     }
 
     return reply.type('text/html').send(`<!doctype html>
@@ -503,7 +532,10 @@ export const registerNpmRoutes = async (
   fastify.post('/npm-login/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     const flow = loginFlows.get(id);
-    if (!flow) {
+    reply.header('Cache-Control', 'no-store');
+    if (!flow || Date.now() - flow.createdAt > 10 * 60 * 1000) {
+      totpService.cancel('', flow?.totpChallenge ?? '');
+      loginFlows.delete(id);
       return reply.status(404).type('text/html').send('Login flow not found');
     }
 
@@ -511,11 +543,67 @@ export const registerNpmRoutes = async (
       typeof request.body === 'object' && request.body
         ? (request.body as Record<string, any>)
         : {};
-    const username = String(body.username ?? '');
-    const password = String(body.password ?? '');
-    const user = await userService.validateCredentials(username, password);
-    if (!user) {
-      return reply.status(401).type('text/html').send('Invalid credentials');
+    let username: string;
+    try {
+      if (flow.totpChallenge) {
+        const result = await totpService.verifyLogin(
+          flow.totpChallenge,
+          String(body.code ?? ''),
+          request.ip,
+          body.recovery === true || body.recovery === 'on'
+        );
+        flow.totpChallenge = undefined;
+        username = result.user.username;
+      } else {
+        username = String(body.username ?? '');
+        const password = String(body.password ?? '');
+        const user = await userService.validateCredentials(username, password);
+        if (!user) {
+          return reply
+            .status(401)
+            .type('text/html')
+            .send('Invalid credentials');
+        }
+        if (user.totp && authService.getAuthMode() !== 'none') {
+          flow.totpChallenge = totpService.beginLogin(user, false, request.ip);
+          return reply
+            .type('text/html')
+            .send(
+              secondFactorForm('Enter the code from your authenticator app.')
+            );
+        }
+      }
+    } catch (error) {
+      const failure = error as { statusCode?: number; code?: string };
+      if (failure.statusCode === 429) {
+        return reply
+          .status(429)
+          .header('Retry-After', '600')
+          .type('text/html')
+          .send('Too many attempts. Try again in ten minutes.');
+      }
+      if (failure.code === 'TOTP_EXPIRED') {
+        flow.totpChallenge = undefined;
+        return reply
+          .status(400)
+          .type('text/html')
+          .send('Verification expired. Reload this page to sign in again.');
+      }
+      if (failure.statusCode === 400) {
+        return reply
+          .status(400)
+          .type('text/html')
+          .send(
+            secondFactorForm(
+              'The code is incorrect or has already been used. Try a new code.'
+            )
+          );
+      }
+      logger.error(`npm login verification failed: ${error}`);
+      return reply
+        .status(500)
+        .type('text/html')
+        .send('Unable to complete verification.');
     }
 
     const tokenResult = await userService.addNpmToken(
@@ -536,6 +624,7 @@ export const registerNpmRoutes = async (
   });
 
   fastify.put('/-/user/*', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
     const routePath = (request.params as { '*': string })['*'];
     const routeUsername = routePath.replace(/^org\.couchdb\.user:/, '');
     const body = getBodyObject(request.body);
@@ -547,6 +636,45 @@ export const registerNpmRoutes = async (
         error: 'Invalid credentials',
         reason: 'Username or password is incorrect',
       });
+    }
+
+    if (user.totp && authService.getAuthMode() !== 'none') {
+      const otp = request.headers['npm-otp'];
+      if (typeof otp !== 'string' || !otp) {
+        return reply.status(401).header('WWW-Authenticate', 'OTP').send({
+          error: 'EOTP',
+          reason: 'A one-time password is required',
+        });
+      }
+      let challenge: string | undefined;
+      try {
+        challenge = totpService.beginLogin(user, false, request.ip);
+        // npm sends both authenticator and recovery codes through npm-otp.
+        await totpService.verifyLogin(
+          challenge,
+          otp,
+          request.ip,
+          !/^\d{6}$/.test(otp)
+        );
+      } catch (error) {
+        const failure = error as { statusCode?: number };
+        if (failure.statusCode === 429) {
+          return reply.status(429).header('Retry-After', '600').send({
+            error: 'TOTP_RATE_LIMITED',
+            reason: 'Too many verification attempts',
+          });
+        }
+        if (failure.statusCode === 400) {
+          return reply.status(401).header('WWW-Authenticate', 'OTP').send({
+            error: 'EOTP',
+            reason: 'The one-time password is invalid or has already been used',
+          });
+        }
+        logger.error(`npm login verification failed: ${error}`);
+        return reply.status(500).send({ error: 'TOTP_STORAGE_ERROR' });
+      } finally {
+        totpService.cancel('', challenge ?? '');
+      }
     }
 
     const tokenResult = await userService.addNpmToken(
