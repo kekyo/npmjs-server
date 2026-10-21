@@ -139,13 +139,23 @@ describe('hosted package import', () => {
 
   const cli = async (
     dryRun: boolean,
-    secret: string | undefined = undefined
+    secret: string | undefined = undefined,
+    source: 'list' | 'nexus' = 'list'
   ) => {
     const list = path.join(root, 'names.txt');
     await fs.writeFile(list, 'plain\n');
     const replies = [
       { prompt: 'Hosted registry URL', answer: url },
-      { prompt: 'Package name list file', answer: list },
+      { prompt: 'Enumeration method (list/nexus)', answer: source },
+      ...(source === 'list'
+        ? [{ prompt: 'Package name list file', answer: list }]
+        : [
+            {
+              prompt: 'Nexus REST API base URL',
+              answer: new URL('/management/service/rest/v1/', url).href,
+            },
+            { prompt: 'Nexus repository name', answer: 'npm-hosted' },
+          ]),
       {
         prompt: 'Authentication (none/basic/bearer)',
         answer: secret ? 'bearer' : 'none',
@@ -302,6 +312,31 @@ describe('hosted package import', () => {
     ).toBe(true);
     expect(requests.some((r) => r.path.includes('external'))).toBe(false);
   });
+
+  test('CLI uses the chosen Nexus repository inventory and downloads only hosted versions', async () => {
+    await publish('plain', ['1.0.0'], { latest: '1.0.0' });
+    routes.set('/management/service/rest/v1/components?repository=npm-hosted', {
+      items: [
+        {
+          repository: 'npm-hosted',
+          format: 'npm',
+          group: '',
+          name: 'plain',
+          version: '1.0.0',
+        },
+      ],
+      continuationToken: null,
+    });
+    routes.set('/group/plain', { name: 'plain', versions: { '9.0.0': {} } });
+    const outcome = await cli(false, undefined, 'nexus');
+    expect(outcome, outcome.output).toMatchObject({ code: 0 });
+    expect(outcome.output).toContain('Imported: 1');
+    expect(requests.map((request) => request.path)).toEqual([
+      '/management/service/rest/v1/components?repository=npm-hosted',
+      '/hosted/plain',
+      '/hosted/plain/1.0.0.tgz',
+    ]);
+  }, 20000);
 
   test('dry-run lists names and versions without downloading tarballs or creating destination files', async () => {
     await publish('plain', ['1.0.0', '2.0.0'], { latest: '1.0.0' });

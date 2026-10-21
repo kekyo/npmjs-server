@@ -14,6 +14,7 @@ import {
   parseImportUrl,
   type ImportAuthentication,
 } from './services/importHttpClient.ts';
+import { enumerateNexusPackages } from './services/nexusImportSource.ts';
 
 /**
  * Runs the interactive offline package importer without starting an HTTP server.
@@ -37,8 +38,28 @@ export const runImportPackages = async (
     );
     const registryUrl = await promptInput(rl, 'Hosted registry URL');
     parseImportUrl(registryUrl);
-    const listFile = await promptInput(rl, 'Package name list file');
-    if (!listFile) throw new Error('Package name list file is required');
+    const method = await promptInput(
+      rl,
+      'Enumeration method (list/nexus)',
+      'list'
+    );
+    let enumerate: (auth: ImportAuthentication) => Promise<string[]>;
+    if (method === 'list') {
+      const listFile = await promptInput(rl, 'Package name list file');
+      if (!listFile) throw new Error('Package name list file is required');
+      enumerate = async () =>
+        parsePackageNames(await fs.readFile(listFile, 'utf8'));
+    } else if (method === 'nexus') {
+      const apiUrl = await promptInput(
+        rl,
+        'Nexus REST API base URL (ending in /service/rest/v1/)'
+      );
+      parseImportUrl(apiUrl);
+      const repository = await promptInput(rl, 'Nexus repository name');
+      if (!repository) throw new Error('Nexus repository name is required');
+      enumerate = async (auth) =>
+        await enumerateNexusPackages(apiUrl, repository, auth);
+    } else throw new Error('Unknown enumeration method');
     const authentication = await promptInput(
       rl,
       'Authentication (none/basic/bearer)',
@@ -87,8 +108,7 @@ export const runImportPackages = async (
       packagesRoot,
       baseUrl: config.baseUrl || '',
       auth,
-      enumerate: async () =>
-        parsePackageNames(await fs.readFile(listFile, 'utf8')),
+      enumerate: async () => await enumerate(auth),
       dryRun,
       logger,
     });
