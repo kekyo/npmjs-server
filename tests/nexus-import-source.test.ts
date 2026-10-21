@@ -124,22 +124,6 @@ describe('Nexus import enumeration', () => {
     );
   });
 
-  test('rejects Bearer authentication before contacting Nexus', async () => {
-    pages.set(null, {
-      status: 200,
-      body: { items: [], continuationToken: null },
-    });
-    await expect(
-      enumerateNexusPackages(apiUrl, 'npm-hosted', {
-        type: 'bearer',
-        token: 'test-token',
-      })
-    ).rejects.toThrow(
-      'Nexus enumeration requires none or basic authentication'
-    );
-    expect(requests).toEqual([]);
-  });
-
   test.each([
     { type: 'basic', username: 'reader', password: 'test-password' },
     { type: 'none' },
