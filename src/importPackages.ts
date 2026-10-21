@@ -16,6 +16,36 @@ import {
 } from './services/importHttpClient.ts';
 import { enumerateNexusPackages } from './services/nexusImportSource.ts';
 
+const readImportInput = async <T>(
+  read: () => Promise<T>,
+  rl: readline.Interface | undefined
+): Promise<T> => {
+  const error = new Error('Import input was interrupted before completion');
+  if (process.stdin.readableEnded || process.stdin.destroyed) throw error;
+  let interrupt!: () => void;
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    interrupt = () => reject(error);
+  });
+  // A pending question does not reject on EOF and would otherwise exit successfully.
+  // Only observe input while prompting; closing stdin after confirmation is valid.
+  process.stdin.once('end', interrupt);
+  process.stdin.once('close', interrupt);
+  process.stdin.once('error', interrupt);
+  rl?.once('close', interrupt);
+  rl?.once('error', interrupt);
+  rl?.once('SIGINT', interrupt);
+  try {
+    return await Promise.race([read(), interrupted]);
+  } finally {
+    process.stdin.removeListener('end', interrupt);
+    process.stdin.removeListener('close', interrupt);
+    process.stdin.removeListener('error', interrupt);
+    rl?.removeListener('close', interrupt);
+    rl?.removeListener('error', interrupt);
+    rl?.removeListener('SIGINT', interrupt);
+  }
+};
+
 /**
  * Runs the interactive offline package importer without starting an HTTP server.
  * @param config - Resolved server configuration, including the normal package directory
@@ -32,36 +62,33 @@ export const runImportPackages = async (
     input: process.stdin,
     output: process.stdout,
   });
+  const input = async (prompt: string, defaultValue: string | undefined) =>
+    await readImportInput(() => promptInput(rl, prompt, defaultValue), rl);
   try {
     logger.info(
       'Import requires a hosted-only source URL. Stop the destination server before importing.'
     );
-    const registryUrl = await promptInput(rl, 'Hosted registry URL');
+    const registryUrl = await input('Hosted registry URL', undefined);
     parseImportUrl(registryUrl);
-    const method = await promptInput(
-      rl,
-      'Enumeration method (list/nexus)',
-      'list'
-    );
+    const method = await input('Enumeration method (list/nexus)', 'list');
     let enumerate: (auth: ImportAuthentication) => Promise<string[]>;
     if (method === 'list') {
-      const listFile = await promptInput(rl, 'Package name list file');
+      const listFile = await input('Package name list file', undefined);
       if (!listFile) throw new Error('Package name list file is required');
       enumerate = async () =>
         parsePackageNames(await fs.readFile(listFile, 'utf8'));
     } else if (method === 'nexus') {
-      const apiUrl = await promptInput(
-        rl,
-        'Nexus REST API base URL (ending in /service/rest/v1/)'
+      const apiUrl = await input(
+        'Nexus REST API base URL (ending in /service/rest/v1/)',
+        undefined
       );
       parseImportUrl(apiUrl);
-      const repository = await promptInput(rl, 'Nexus repository name');
+      const repository = await input('Nexus repository name', undefined);
       if (!repository) throw new Error('Nexus repository name is required');
       enumerate = async (auth) =>
         await enumerateNexusPackages(apiUrl, repository, auth);
     } else throw new Error('Unknown enumeration method');
-    const authentication = await promptInput(
-      rl,
+    const authentication = await input(
       'Authentication (none/basic/bearer)',
       'none'
     );
@@ -69,13 +96,17 @@ export const runImportPackages = async (
     if (authentication === 'basic' || authentication === 'bearer') {
       const username =
         authentication === 'basic'
-          ? await promptInput(rl, 'Source username')
+          ? await input('Source username', undefined)
           : '';
       if (authentication === 'basic' && (!username || username.includes(':')))
         throw new Error('A valid source username is required');
       rl.close();
-      const secret = await promptPassword(
-        authentication === 'basic' ? 'Source password' : 'Source token'
+      const secret = await readImportInput(
+        () =>
+          promptPassword(
+            authentication === 'basic' ? 'Source password' : 'Source token'
+          ),
+        undefined
       );
       if (!secret) throw new Error('Source credentials are required');
       auth =
@@ -88,15 +119,13 @@ export const runImportPackages = async (
       });
     } else if (authentication !== 'none')
       throw new Error('Unknown authentication method');
-    const packagesRoot = await promptInput(
-      rl,
+    const packagesRoot = await input(
       'Destination package directory',
       config.packageDir || './packages'
     );
-    const confirmed = await promptConfirm(
-      rl,
-      dryRun ? 'Run dry-run?' : 'Start import?',
-      false
+    const confirmed = await readImportInput(
+      () => promptConfirm(rl, dryRun ? 'Run dry-run?' : 'Start import?', false),
+      rl
     );
     rl.close();
     if (!confirmed) {

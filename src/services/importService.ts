@@ -51,7 +51,10 @@ export interface ImportOptions {
   baseUrl: string;
   /** Credentials for the source endpoint. */
   auth: ImportAuthentication;
-  /** Enumerates all requested names or rejects if enumeration is incomplete. */
+  /**
+   * Enumerates all requested names or rejects if enumeration is incomplete.
+   * @returns The complete name inventory
+   */
   enumerate: () => Promise<string[]>;
   /** Reports the inventory without modifying the destination. */
   dryRun: boolean;
@@ -61,7 +64,10 @@ export interface ImportOptions {
 
 /** Offline import operation. */
 export interface ImportService {
-  /** Executes enumeration, validation and storage, reporting all failures. */
+  /**
+   * Executes enumeration, validation and storage, reporting all failures.
+   * @returns Inventory, successful operation counts, conflicts and failures
+   */
   readonly run: () => Promise<ImportResult>;
 }
 
@@ -272,8 +278,26 @@ export const createImportService = (options: ImportOptions): ImportService => {
           ...packageNameToPathSegments(name)
         );
         const tagsPath = path.join(packageRoot, 'dist-tags.json');
-        const existingTags = metadata.getDistTags(name);
+        let existingTags: Record<string, string>;
         try {
+          try {
+            const stored = object(
+              JSON.parse(await fs.readFile(tagsPath, 'utf8'))
+            );
+            existingTags =
+              stored.format === 'npmjs-server/dist-tags-v1'
+                ? object(stored.tags)
+                : stored;
+            if (
+              Object.values(existingTags).some(
+                (version) => typeof version !== 'string'
+              )
+            )
+              throw new Error('Invalid destination tags');
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+            existingTags = metadata.getDistTags(name);
+          }
           await fs.mkdir(packageRoot, { recursive: true });
           // Freeze current tags before adding versions so interrupted imports never synthesize latest.
           await writePrivateFile(
@@ -288,9 +312,8 @@ export const createImportService = (options: ImportOptions): ImportService => {
           fail(`${name}: could not prepare destination tags`, false);
           continue;
         }
-        const available = new Set(
-          metadata.getPackageMetadata(name).map((entry) => entry.version)
-        );
+        // A source tag may only refer to an archive successfully reconciled in this run.
+        const available = new Set<string>();
         for (const version of versionNames) {
           const label = `${name}@${version}`;
           try {

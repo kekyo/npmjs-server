@@ -31,6 +31,7 @@ export const enumerateNexusPackages = async (
   repository: string,
   auth: ImportAuthentication
 ): Promise<string[]> => {
+  // The repository-name pattern is defined by Nexus's NpmHostedRepositoryApiRequest schema.
   if (!/^[a-zA-Z0-9-][a-zA-Z0-9_.-]*$/.test(repository)) {
     throw new Error('Invalid Nexus repository name');
   }

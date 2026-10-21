@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
@@ -49,13 +49,15 @@ describe('hosted package import', () => {
     accept: string | undefined;
   }>;
   let requiredAuthorization: string | undefined;
+  let beforeServe: ((pathname: string) => Promise<void>) | undefined;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'npm-import-test-'));
     routes = new Map();
     requests = [];
     requiredAuthorization = undefined;
-    server = createServer((req, res) => {
+    beforeServe = undefined;
+    server = createServer(async (req, res) => {
       requests.push({
         path: req.url!,
         authorization: req.headers.authorization,
@@ -73,6 +75,7 @@ describe('hosted package import', () => {
         res.writeHead(404).end();
         return;
       }
+      if (beforeServe) await beforeServe(req.url!);
       res.setHeader(
         'Content-Type',
         Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json'
@@ -85,6 +88,7 @@ describe('hosted package import', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve()))
     );
@@ -427,6 +431,279 @@ describe('hosted package import', () => {
       '@acme/pkg',
     ]);
     expect(() => parsePackageNames('../secret')).toThrow();
+  });
+
+  test('retries an incomplete package without downloading completed archives or inventing latest', async () => {
+    await publish('plain', ['1.0.0', '2.0.0'], {
+      latest: '2.0.0',
+      stable: '1.0.0',
+    });
+    const missing = routes.get('/hosted/plain/2.0.0.tgz')!;
+    routes.delete('/hosted/plain/2.0.0.tgz');
+    expect(await importer(['plain']).run()).toMatchObject({
+      imported: 1,
+      failed: 2,
+    });
+    const metadata = createMetadataService(
+      path.join(root, 'packages'),
+      '',
+      logger
+    );
+    await metadata.initialize();
+    expect(metadata.getDistTags('plain')).toEqual({ stable: '1.0.0' });
+    routes.set('/hosted/plain/2.0.0.tgz', missing);
+    requests.length = 0;
+    expect(await importer(['plain']).run()).toMatchObject({
+      imported: 1,
+      skipped: 1,
+      failed: 0,
+    });
+    expect(
+      requests.some((request) => request.path === '/hosted/plain/1.0.0.tgz')
+    ).toBe(false);
+    await metadata.initialize();
+    expect(metadata.getDistTags('plain')).toEqual({
+      latest: '2.0.0',
+      stable: '1.0.0',
+    });
+  });
+
+  test('reconciles metadata and unfinished tags even when every archive is already present', async () => {
+    const doc = await publish('plain', ['1.0.0'], {});
+    await importer(['plain']).run();
+    doc['dist-tags'].latest = '1.0.0';
+    (doc.versions['1.0.0'] as any).deprecated = 'Updated deprecation';
+    (doc.versions['1.0.0'] as any).readme = '# Updated version README';
+    doc.readme = '# Updated package README';
+    requests.length = 0;
+    expect(await importer(['plain']).run()).toMatchObject({
+      imported: 0,
+      skipped: 1,
+      failed: 0,
+    });
+    expect(requests.map((request) => request.path)).toEqual(['/hosted/plain']);
+    const metadata = createMetadataService(
+      path.join(root, 'packages'),
+      '',
+      logger
+    );
+    await metadata.initialize();
+    expect(metadata.getDistTags('plain')).toEqual({ latest: '1.0.0' });
+    expect(metadata.getPackageVersion('plain', '1.0.0')).toMatchObject({
+      manifest: {
+        deprecated: 'Updated deprecation',
+        readme: '# Updated version README',
+      },
+      packageReadme: '# Updated package README',
+    });
+  });
+
+  test('never adds source tags pointing at an existing version rejected because its contents differ', async () => {
+    const doc = await publish('plain', ['1.0.0'], {});
+    await importer(['plain']).run();
+    doc['dist-tags'].latest = '1.0.0';
+    (doc.versions['1.0.0'] as any).dist.shasum = '0'.repeat(40);
+    expect(await importer(['plain']).run()).toMatchObject({
+      conflicts: 1,
+      failed: 1,
+    });
+    const metadata = createMetadataService(
+      path.join(root, 'packages'),
+      '',
+      logger
+    );
+    await metadata.initialize();
+    expect(metadata.getDistTags('plain')).toEqual({});
+  });
+
+  test('keeps existing tags and reports conflicts between hosted sources', async () => {
+    const doc = await publish('plain', ['1.0.0', '2.0.0'], { latest: '1.0.0' });
+    await importer(['plain']).run();
+    doc['dist-tags'].latest = '2.0.0';
+    expect(await importer(['plain']).run()).toMatchObject({
+      skipped: 2,
+      conflicts: 1,
+      failed: 0,
+    });
+    const metadata = createMetadataService(
+      path.join(root, 'packages'),
+      '',
+      logger
+    );
+    await metadata.initialize();
+    expect(metadata.getDistTags('plain')).toEqual({ latest: '1.0.0' });
+  });
+
+  test('preserves an unreadable destination tag snapshot and reports failure instead of replacing it', async () => {
+    await publish('plain', ['1.0.0'], { latest: '1.0.0' });
+    await importer(['plain']).run();
+    const tagFile = path.join(root, 'packages/plain/dist-tags.json');
+    await fs.writeFile(tagFile, '{incomplete existing file');
+    const result = await importer(['plain']).run();
+    expect(result.failed).toBe(1);
+    expect(await fs.readFile(tagFile, 'utf8')).toBe(
+      '{incomplete existing file'
+    );
+  });
+
+  test('recovers after a version commit fails while keeping previously completed data usable', async () => {
+    await publish('plain', ['1.0.0', '2.0.0'], { latest: '2.0.0' });
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to).endsWith('/plain/2.0.0'))
+        throw Object.assign(new Error('Storage unavailable'), { code: 'EIO' });
+      await rename(from, to);
+    });
+    expect(await importer(['plain']).run()).toMatchObject({
+      imported: 1,
+      failed: 2,
+    });
+    expect(
+      (await fs.readdir(path.join(root, 'packages/plain'))).some((name) =>
+        name.startsWith('.import-')
+      )
+    ).toBe(false);
+    vi.restoreAllMocks();
+    expect(await importer(['plain']).run()).toMatchObject({
+      imported: 1,
+      skipped: 1,
+      failed: 0,
+    });
+  });
+
+  test('retries tags after their final write fails without repeating archive transfers', async () => {
+    await publish('plain', ['1.0.0'], { latest: '1.0.0' });
+    const tagsFile = path.join(root, 'packages/plain/dist-tags.json');
+    beforeServe = async (pathname) => {
+      if (pathname.endsWith('.tgz')) await fs.chmod(tagsFile, 0o444);
+    };
+    expect(await importer(['plain']).run()).toMatchObject({
+      imported: 1,
+      failed: 1,
+    });
+    beforeServe = undefined;
+    await fs.chmod(tagsFile, 0o644);
+    requests.length = 0;
+    expect(await importer(['plain']).run()).toMatchObject({
+      imported: 0,
+      skipped: 1,
+      failed: 0,
+    });
+    expect(requests.map((request) => request.path)).toEqual(['/hosted/plain']);
+    const metadata = createMetadataService(
+      path.join(root, 'packages'),
+      '',
+      logger
+    );
+    await metadata.initialize();
+    expect(metadata.getDistTags('plain')).toEqual({ latest: '1.0.0' });
+  });
+
+  test('leaves existing version metadata intact when its atomic replacement fails', async () => {
+    const doc = await publish('plain', ['1.0.0'], {});
+    await importer(['plain']).run();
+    const metadataFile = path.join(root, 'packages/plain/1.0.0/metadata.json');
+    const before = await fs.readFile(metadataFile, 'utf8');
+    (doc.versions['1.0.0'] as any).deprecated = 'New notice';
+    await fs.chmod(metadataFile, 0o444);
+    expect(await importer(['plain']).run()).toMatchObject({
+      skipped: 0,
+      failed: 1,
+    });
+    expect(await fs.readFile(metadataFile, 'utf8')).toBe(before);
+    await fs.chmod(metadataFile, 0o644);
+    expect(await importer(['plain']).run()).toMatchObject({
+      skipped: 1,
+      failed: 0,
+    });
+  });
+
+  test('compares archive bytes when the source provides no checksums and refuses different bytes', async () => {
+    const doc = await publish('plain', ['1.0.0'], {});
+    await importer(['plain']).run();
+    const dist = (doc.versions['1.0.0'] as any).dist;
+    delete dist.shasum;
+    delete dist.integrity;
+    requests.length = 0;
+    expect(await importer(['plain']).run()).toMatchObject({
+      skipped: 1,
+      conflicts: 0,
+    });
+    expect(requests.map((request) => request.path)).toContain(
+      '/hosted/plain/1.0.0.tgz'
+    );
+    const old = routes.get('/hosted/plain/1.0.0.tgz') as Buffer;
+    routes.set(
+      '/hosted/plain/1.0.0.tgz',
+      Buffer.concat([old, Buffer.from('changed archive')])
+    );
+    expect(await importer(['plain']).run()).toMatchObject({
+      skipped: 0,
+      conflicts: 1,
+    });
+    expect(
+      await fs.readFile(path.join(root, 'packages/plain/1.0.0/plain-1.0.0.tgz'))
+    ).toEqual(old);
+  });
+
+  test('dry-run leaves existing archive, metadata and tag bytes unchanged', async () => {
+    const doc = await publish('plain', ['1.0.0'], { latest: '1.0.0' });
+    await importer(['plain']).run();
+    const files = [
+      'plain/1.0.0/plain-1.0.0.tgz',
+      'plain/1.0.0/package.json',
+      'plain/1.0.0/metadata.json',
+      'plain/dist-tags.json',
+    ];
+    const before = await Promise.all(
+      files.map((file) => fs.readFile(path.join(root, 'packages', file)))
+    );
+    doc['dist-tags'].next = '1.0.0';
+    (doc.versions['1.0.0'] as any).deprecated = 'Changed after first import';
+    expect(await importer(['plain'], true).run()).toMatchObject({
+      imported: 0,
+      skipped: 0,
+      failed: 0,
+    });
+    expect(
+      await Promise.all(
+        files.map((file) => fs.readFile(path.join(root, 'packages', file)))
+      )
+    ).toEqual(before);
+  });
+
+  test('rejects missing source tags and accounts for failure without creating a default latest', async () => {
+    const doc = await publish('plain', ['1.0.0'], {});
+    delete (doc as any)['dist-tags'];
+    expect(await importer(['plain']).run()).toMatchObject({
+      imported: 0,
+      failed: 1,
+    });
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
+  test('ignores interrupted staging directories when loading completed packages', async () => {
+    await publish('plain', ['1.0.0'], {});
+    await importer(['plain']).run();
+    await fs.cp(
+      path.join(root, 'packages/plain/1.0.0'),
+      path.join(root, 'packages/plain/.import-interrupted'),
+      { recursive: true }
+    );
+    const metadata = createMetadataService(
+      path.join(root, 'packages'),
+      '',
+      logger
+    );
+    await metadata.initialize();
+    expect(
+      metadata.getPackageMetadata('plain').map((version) => version.version)
+    ).toEqual(['1.0.0']);
+    expect(await importer(['plain']).run()).toMatchObject({
+      skipped: 1,
+      imported: 0,
+      failed: 0,
+    });
   });
 
   test.each([

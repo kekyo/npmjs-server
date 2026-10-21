@@ -17,9 +17,17 @@ export type ImportAuthentication =
 
 /** Read-only HTTP client for an import source. */
 export interface ImportHttpClient {
-  /** Downloads a complete JSON metadata document. */
+  /**
+   * Downloads a complete JSON metadata document.
+   * @param url - HTTP(S) source URL
+   * @returns Parsed JSON requiring validation by the caller
+   */
   readonly json: (url: string) => Promise<unknown>;
-  /** Downloads unmodified archive bytes. */
+  /**
+   * Downloads unmodified archive bytes.
+   * @param url - HTTP(S) archive URL
+   * @returns Complete downloaded bytes
+   */
   readonly buffer: (url: string) => Promise<Buffer>;
 }
 
@@ -27,6 +35,7 @@ export interface ImportHttpClient {
  * Validates a source URL without permitting credentials in URLs or non-HTTP protocols.
  * @param value - Source URL
  * @returns Parsed URL
+ * @remarks Rejects invalid URLs, embedded credentials and fragments without echoing input.
  */
 export const parseImportUrl = (value: string): URL => {
   let url: URL;
