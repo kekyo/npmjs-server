@@ -270,7 +270,8 @@ describe('offline import CLI lifecycle', () => {
 
   test('Nexus enumeration failure reports a nonzero exit without exposing response or credentials', async () => {
     status = 503;
-    const input = replies('bearer');
+    const input = replies('basic');
+    input[3]!.prompt = 'Authentication (none/basic)';
     input.splice(
       1,
       2,
@@ -289,7 +290,7 @@ describe('offline import CLI lifecycle', () => {
     expect(requests).toEqual([
       {
         path: '/management/service/rest/v1/components',
-        authorization: `Bearer ${secret}`,
+        authorization: `Basic ${Buffer.from(`migration-user:${secret}`).toString('base64')}`,
       },
     ]);
   });

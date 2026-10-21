@@ -20,7 +20,7 @@ const metadataObject = (value: unknown): Record<string, unknown> => {
  * Enumerates all npm package names in a specified Nexus hosted repository.
  * @param apiUrl - Explicit REST API base URL including /service/rest/v1/
  * @param repository - Name of the hosted repository to enumerate
- * @param auth - Credentials scoped to the supplied API URL
+ * @param auth - None or Basic credentials scoped to the supplied API URL
  * @returns Unique package names in the order encountered, with npm scopes restored
  * @remarks Rejects incomplete or inconsistent inventories rather than returning partial names.
  * The caller must select a hosted repository; repository types are not discovered here.
@@ -31,6 +31,9 @@ export const enumerateNexusPackages = async (
   repository: string,
   auth: ImportAuthentication
 ): Promise<string[]> => {
+  if (auth.type !== 'none' && auth.type !== 'basic') {
+    throw new Error('Nexus enumeration requires none or basic authentication');
+  }
   // The repository-name pattern is defined by Nexus's NpmHostedRepositoryApiRequest schema.
   if (!/^[a-zA-Z0-9-][a-zA-Z0-9_.-]*$/.test(repository)) {
     throw new Error('Invalid Nexus repository name');

@@ -89,9 +89,16 @@ export const runImportPackages = async (
         await enumerateNexusPackages(apiUrl, repository, auth);
     } else throw new Error('Unknown enumeration method');
     const authentication = await input(
-      'Authentication (none/basic/bearer)',
+      method === 'nexus'
+        ? 'Authentication (none/basic)'
+        : 'Authentication (none/basic/bearer)',
       'none'
     );
+    if (method === 'nexus' && authentication === 'bearer') {
+      throw new Error(
+        'Nexus enumeration requires none or basic authentication'
+      );
+    }
     let auth: ImportAuthentication = { type: 'none' };
     if (authentication === 'basic' || authentication === 'bearer') {
       const username =
