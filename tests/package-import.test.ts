@@ -149,8 +149,8 @@ describe('hosted package import', () => {
     const list = path.join(root, 'names.txt');
     await fs.writeFile(list, 'plain\n');
     const replies = [
-      { prompt: 'Hosted registry URL', answer: url },
       { prompt: 'Enumeration method (list/nexus)', answer: source },
+      { prompt: 'Hosted registry URL', answer: url },
       ...(source === 'list'
         ? [{ prompt: 'Package name list file', answer: list }]
         : [
@@ -161,10 +161,20 @@ describe('hosted package import', () => {
             { prompt: 'Nexus repository name', answer: 'npm-hosted' },
           ]),
       {
-        prompt: 'Authentication (none/basic/bearer)',
-        answer: secret ? 'bearer' : 'none',
+        prompt:
+          source === 'nexus'
+            ? 'Authentication (none/basic)'
+            : 'Authentication (none/basic/bearer)',
+        answer: secret ? (source === 'nexus' ? 'basic' : 'bearer') : 'none',
       },
-      ...(secret ? [{ prompt: 'Source token', answer: secret }] : []),
+      ...(secret
+        ? source === 'nexus'
+          ? [
+              { prompt: 'Source username', answer: 'reader' },
+              { prompt: 'Source password', answer: secret },
+            ]
+          : [{ prompt: 'Source token', answer: secret }]
+        : []),
       { prompt: 'Destination package directory', answer: '' },
       { prompt: dryRun ? 'Run dry-run?' : 'Start import?', answer: 'y' },
     ];
@@ -181,7 +191,10 @@ describe('hosted package import', () => {
             '-c',
             path.join(root, 'config.json'),
           ],
-          { timeout: 15000 }
+          {
+            timeout: 15000,
+            env: { ...process.env, HOME: root, USERPROFILE: root },
+          }
         );
         let output = '';
         let next = 0;

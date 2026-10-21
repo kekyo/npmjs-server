@@ -73,6 +73,23 @@ describe('offline import CLI lifecycle', () => {
         response.writeHead(status).end(JSON.stringify({ message: secret }));
         return;
       }
+      if (pathname === '/management/service/rest/v1/components') {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(
+          JSON.stringify({
+            items: [
+              {
+                repository: 'npm-hosted',
+                format: 'npm',
+                group: '',
+                name: 'plain',
+              },
+            ],
+            continuationToken: null,
+          })
+        );
+        return;
+      }
       if (pathname === '/hosted/plain') {
         response.setHeader('Content-Type', 'application/json');
         response.end(
@@ -136,8 +153,8 @@ describe('offline import CLI lifecycle', () => {
   });
 
   const replies = (authentication: 'none' | 'basic' | 'bearer'): Reply[] => [
-    { prompt: 'Hosted registry URL', answer: registry },
     { prompt: 'Enumeration method (list/nexus)', answer: 'list' },
+    { prompt: 'Hosted registry URL', answer: registry },
     { prompt: 'Package name list file', answer: listFile },
     { prompt: 'Authentication (none/basic/bearer)', answer: authentication },
     ...(authentication === 'basic'
@@ -176,7 +193,7 @@ describe('offline import CLI lifecycle', () => {
         [executable, '--import-packages', '-c', configFile, ...args],
         {
           cwd: root,
-          env: { ...env, ...environment },
+          env: { ...env, HOME: root, USERPROFILE: root, ...environment },
           timeout: 15000,
           killSignal: 'SIGKILL',
         }
@@ -215,6 +232,238 @@ describe('offline import CLI lifecycle', () => {
     }
   );
 
+  test.each([false, true])(
+    'uses npmrc registry and Bearer credentials after consent (dry-run: %s)',
+    async (dryRun) => {
+      const npmrc = `registry=${registry}\n//${new URL(registry).host}/hosted/:_authToken=\${IMPORT_TEST_TOKEN}\n`;
+      await fs.writeFile(path.join(root, '.npmrc'), npmrc);
+      const outcome = await run(
+        [
+          { prompt: 'Enumeration method (list/nexus)', answer: 'list' },
+          { prompt: 'Use settings from ~/.npmrc?', answer: 'y' },
+          { prompt: 'Package name list file', answer: listFile },
+          { prompt: 'Destination package directory', answer: '' },
+          { prompt: dryRun ? 'Run dry-run?' : 'Start import?', answer: 'y' },
+        ],
+        dryRun ? ['--dry-run'] : [],
+        { IMPORT_TEST_TOKEN: secret }
+      );
+      expect(outcome, outcome.output).toMatchObject({ code: 0, signal: null });
+      expect(outcome.output).not.toMatch(
+        /Hosted registry URL:|Authentication \(|Source token:/
+      );
+      expect(outcome.output).not.toContain(secret);
+      expect(requests).toHaveLength(dryRun ? 1 : 2);
+      expect(
+        requests.every(
+          ({ authorization }) => authorization === `Bearer ${secret}`
+        )
+      ).toBe(true);
+      expect(await fs.readFile(path.join(root, '.npmrc'), 'utf8')).toBe(npmrc);
+      if (dryRun)
+        await expect(
+          fs.stat(path.join(root, 'settings', 'normal-packages'))
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  );
+
+  test.each(['n', ''])(
+    'declining npmrc with %j uses only manually supplied settings',
+    async (answer) => {
+      await fs.writeFile(
+        path.join(root, '.npmrc'),
+        `registry=https://unused.example/\n//${new URL(registry).host}/:_authToken=${secret}`
+      );
+      const input = replies('none');
+      input.splice(1, 0, { prompt: 'Use settings from ~/.npmrc?', answer });
+      const outcome = await run(input, [], {});
+      expect(outcome, outcome.output).toMatchObject({ code: 0, signal: null });
+      expect(outcome.output).toContain('Hosted registry URL:');
+      expect(requests).toHaveLength(2);
+      expect(
+        requests.every(({ authorization }) => authorization === undefined)
+      ).toBe(true);
+      expect(outcome.output).not.toContain(secret);
+    }
+  );
+
+  test.each(['empty', 'invalid', 'directory'])(
+    'falls back to manual input for an %s npmrc',
+    async (kind) => {
+      if (kind === 'directory') await fs.mkdir(path.join(root, '.npmrc'));
+      else
+        await fs.writeFile(
+          path.join(root, '.npmrc'),
+          kind === 'empty'
+            ? ''
+            : 'registry=https://user:private-secret@example.org/\n//example.org/:_authToken=${UNSET_IMPORT_TEST_TOKEN}'
+        );
+      const outcome = await run(replies('none'), [], {});
+      expect(outcome, outcome.output).toMatchObject({ code: 0, signal: null });
+      expect(outcome.output).not.toContain('Use settings from ~/.npmrc?');
+      expect(outcome.output).not.toContain('private-secret');
+      expect(requests).toHaveLength(2);
+    }
+  );
+
+  test.each([true, false])(
+    'resolves authentication-only npmrc after manual URL input (matching: %s)',
+    async (matching) => {
+      await fs.writeFile(
+        path.join(root, '.npmrc'),
+        `//${new URL(registry).host}/${matching ? 'hosted' : 'unrelated'}/:_authToken=${secret}`
+      );
+      const input = replies('none');
+      input.splice(1, 0, {
+        prompt: 'Use settings from ~/.npmrc?',
+        answer: 'y',
+      });
+      if (matching) input.splice(4, 1);
+      const outcome = await run(input, [], {});
+      expect(outcome, outcome.output).toMatchObject({ code: 0, signal: null });
+      expect(requests).toHaveLength(2);
+      expect(
+        requests.every(
+          ({ authorization }) =>
+            authorization === (matching ? `Bearer ${secret}` : undefined)
+        )
+      ).toBe(true);
+      expect(outcome.output).not.toContain(secret);
+    }
+  );
+
+  test('asks for one registry when multiple distinct URLs are configured', async () => {
+    await fs.writeFile(
+      path.join(root, '.npmrc'),
+      `registry=https://unused.example/\n@team:registry=${registry}\n@alias:registry=${registry}`
+    );
+    const input = replies('none');
+    input.splice(
+      1,
+      1,
+      { prompt: 'Use settings from ~/.npmrc?', answer: 'y' },
+      { prompt: 'Registry number', answer: '2' }
+    );
+    const outcome = await run(input, [], {});
+    expect(outcome, outcome.output).toMatchObject({ code: 0, signal: null });
+    expect(outcome.output).not.toContain('Hosted registry URL:');
+    expect(requests).toHaveLength(2);
+  });
+
+  test.each(['n', 'eof'])(
+    'npmrc import makes no requests when stopped at confirmation: %s',
+    async (stop) => {
+      await fs.writeFile(
+        path.join(root, '.npmrc'),
+        `registry=${registry}\n//${new URL(registry).host}/:_authToken=${secret}`
+      );
+      const input: Reply[] = [
+        { prompt: 'Enumeration method (list/nexus)', answer: 'list' },
+        {
+          prompt: 'Use settings from ~/.npmrc?',
+          answer: stop === 'eof' ? null : 'y',
+        },
+      ];
+      if (stop === 'n')
+        input.push(
+          { prompt: 'Package name list file', answer: listFile },
+          { prompt: 'Destination package directory', answer: '' },
+          { prompt: 'Start import?', answer: 'n' }
+        );
+      const outcome = await run(input, [], {});
+      expect(outcome, outcome.output).toMatchObject({
+        code: stop === 'eof' ? 1 : 0,
+        signal: null,
+      });
+      expect(requests).toEqual([]);
+      expect(outcome.output).not.toContain(secret);
+      await expect(
+        fs.stat(path.join(root, 'settings', 'normal-packages'))
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  );
+
+  test('Nexus keeps the npmrc URL and asks for Basic authentication instead of using Bearer', async () => {
+    await fs.writeFile(
+      path.join(root, '.npmrc'),
+      `registry=${registry}\n//${new URL(registry).host}/:_authToken=unusable-nexus-token`
+    );
+    const outcome = await run(
+      [
+        { prompt: 'Enumeration method (list/nexus)', answer: 'nexus' },
+        { prompt: 'Use settings from ~/.npmrc?', answer: 'y' },
+        {
+          prompt: 'Nexus REST API base URL',
+          answer: new URL('/management/service/rest/v1/', registry).href,
+        },
+        { prompt: 'Nexus repository name', answer: 'npm-hosted' },
+        { prompt: 'Authentication (none/basic)', answer: 'basic' },
+        { prompt: 'Source username', answer: 'migration-user' },
+        { prompt: 'Source password', answer: secret },
+        { prompt: 'Destination package directory', answer: '' },
+        { prompt: 'Start import?', answer: 'y' },
+      ],
+      [],
+      {}
+    );
+    expect(outcome, outcome.output).toMatchObject({ code: 0, signal: null });
+    expect(outcome.output).toMatch(/Bearer.*Nexus/);
+    expect(outcome.output).not.toContain('Authentication (none/basic/bearer)');
+    expect(outcome.output).not.toMatch(/unusable-nexus-token|Source token:/);
+    expect(requests).toHaveLength(3);
+    const expected = `Basic ${Buffer.from(`migration-user:${secret}`).toString('base64')}`;
+    expect(
+      requests.every(({ authorization }) => authorization === expected)
+    ).toBe(true);
+  });
+
+  test.each(['host', 'separate', 'manual-api'])(
+    'Nexus resolves Basic credentials independently for the registry and API: %s',
+    async (scope) => {
+      const host = new URL(registry).host;
+      const sourceAuth = Buffer.from('source-user:source-password').toString(
+        'base64'
+      );
+      const apiAuth = Buffer.from('api-user:api-password').toString('base64');
+      await fs.writeFile(
+        path.join(root, '.npmrc'),
+        `registry=${registry}\n//${host}/${scope === 'host' ? '' : 'hosted/'}:_auth=${sourceAuth}\n${scope === 'separate' ? `//${host}/management/:_auth=${apiAuth}` : ''}`
+      );
+      const input: Reply[] = [
+        { prompt: 'Enumeration method (list/nexus)', answer: 'nexus' },
+        { prompt: 'Use settings from ~/.npmrc?', answer: 'y' },
+        {
+          prompt: 'Nexus REST API base URL',
+          answer: new URL('/management/service/rest/v1/', registry).href,
+        },
+        { prompt: 'Nexus repository name', answer: 'npm-hosted' },
+      ];
+      if (scope === 'manual-api')
+        input.push({
+          prompt: 'Nexus API authentication (none/basic)',
+          answer: 'none',
+        });
+      input.push(
+        { prompt: 'Destination package directory', answer: '' },
+        { prompt: 'Start import?', answer: 'y' }
+      );
+      const outcome = await run(input, [], {});
+      expect(outcome, outcome.output).toMatchObject({ code: 0, signal: null });
+      expect(requests.map(({ authorization }) => authorization)).toEqual([
+        scope === 'host'
+          ? `Basic ${sourceAuth}`
+          : scope === 'separate'
+            ? `Basic ${apiAuth}`
+            : undefined,
+        `Basic ${sourceAuth}`,
+        `Basic ${sourceAuth}`,
+      ]);
+      expect(outcome.output).not.toMatch(/source-password|api-password/);
+      expect(outcome.output).not.toContain(sourceAuth);
+      expect(outcome.output).not.toContain(apiAuth);
+    }
+  );
+
   test.each(['basic', 'bearer'] as const)(
     'EOF during %s secret input fails without revealing credentials',
     async (authentication) => {
@@ -234,7 +483,12 @@ describe('offline import CLI lifecycle', () => {
 
   test('SIGINT at a prompt cannot report a successful import', async () => {
     const outcome = await run(
-      [{ prompt: 'Hosted registry URL', answer: { signal: 'SIGINT' } }],
+      [
+        {
+          prompt: 'Enumeration method (list/nexus)',
+          answer: { signal: 'SIGINT' },
+        },
+      ],
       [],
       {}
     );
@@ -272,10 +526,10 @@ describe('offline import CLI lifecycle', () => {
     status = 503;
     const input = replies('basic');
     input[3]!.prompt = 'Authentication (none/basic)';
+    input[0]!.answer = 'nexus';
     input.splice(
-      1,
       2,
-      { prompt: 'Enumeration method (list/nexus)', answer: 'nexus' },
+      1,
       {
         prompt: 'Nexus REST API base URL',
         answer: new URL('/management/service/rest/v1/', registry).href,
