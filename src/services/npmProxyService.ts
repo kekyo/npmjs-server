@@ -322,7 +322,7 @@ const getPackageVersionKey = (packageName: string, version: string): string =>
 const getPublishedTime = (
   input: CacheTarballInput,
   entry: PackageEntry
-): string => {
+): string | undefined => {
   const time = input.published ?? input.versionDocument.time;
   return typeof time === 'string' && time.length > 0
     ? time

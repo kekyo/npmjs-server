@@ -24,6 +24,7 @@ import {
 } from './utils/urlResolver';
 import { runAuthInit } from './authInit';
 import { runTotpReset } from './totpReset';
+import { runImportPackages } from './importPackages';
 import { loadConfigFromPath } from './utils/configLoader';
 import { dirname } from 'path';
 
@@ -211,6 +212,18 @@ program
       '--totp-reset <username>',
       "reset a user's two-factor authentication (stop the server first)"
     ).conflicts('authInit')
+  )
+  .addOption(
+    new Option(
+      '--import-packages',
+      'import from a hosted npm registry (stop the server first)'
+    ).conflicts(['authInit', 'totpReset'])
+  )
+  .addOption(
+    new Option(
+      '--dry-run',
+      'list import targets without changing the destination'
+    ).implies({ importPackages: true })
   )
   .action(async (options) => {
     // Determine config file path
@@ -402,6 +415,23 @@ program
         packageDir: proxyPackageDir,
       },
     };
+
+    // Handle offline hosted-registry migration
+    if (options.importPackages) {
+      try {
+        process.exitCode = await runImportPackages(
+          config,
+          logger,
+          Boolean(options.dryRun)
+        );
+      } catch {
+        logger.error(
+          'Package import failed. Check the source URL, credentials and destination.'
+        );
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     // Handle offline second-factor recovery
     if (options.totpReset) {
