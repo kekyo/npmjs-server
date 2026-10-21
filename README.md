@@ -148,79 +148,6 @@ Set `duplicatePackagePolicy` to `overwrite` to replace it, `ignore` to keep it, 
 The default upload request limit is 100 MB. Change it with `maxUploadSizeMb`.
 Because `npm publish` embeds the archive as Base64 in JSON, the limit must accommodate a request larger than the archive itself.
 
-## Importing from an Existing Registry
-
-Use `--import-packages` to import every version of packages published directly to an existing npm registry. Stop the destination npmjs-server before running it. This mode writes to the normal `packageDir` without starting an HTTP server.
-
-### Choosing a Source
-
-Specify a URL that serves only directly published packages. Nexus 3 calls this a hosted repository. Do not use a proxy URL that caches packages from an upstream such as npmjs.org, or a group URL that combines repositories. Repository types are not detected automatically.
-
-Check that version metadata and archive downloads, as well as search results, contain only directly published content. Disabling upstream connections alone does not exclude existing cached packages. External packages manually published to hosted repositories are included.
-
-Choose the enumeration method at the `Enumeration method` prompt.
-
-| Method | Required input | Coverage |
-| --- | --- | --- |
-| `nexus` | Hosted npm URL, REST API base URL, and repository name | All packages in the specified repository |
-| `list` | Hosted-only npm URL and package name list file | Packages named in the list |
-
-For example, enter the following for Nexus 3. Include any public path prefix added by your reverse proxy.
-
-```text
-Hosted registry URL: https://nexus.example.com/repository/npm-internal/
-Enumeration method (list/nexus): nexus
-Nexus REST API base URL: https://nexus.example.com/service/rest/v1/
-Nexus repository name: npm-internal
-```
-
-The Nexus method follows every page of the [Components API](https://help.sonatype.com/en/components-api.html). Credentials need read access to both that API and the hosted repository. See [Nexus npm repositories](https://help.sonatype.com/en/npm-registry.html) for hosted, proxy, and group configuration.
-
-Use `list` for other servers or when the Nexus enumeration API is unavailable. Provide a UTF-8 file containing one package name per line. Empty lines are ignored and repeated names are processed once. Versions do not need to be listed.
-
-```text
-internal-utils
-@myorg/client
-```
-
-The same hosted-only URL requirement applies to name lists. Packages absent from the list are outside the import's coverage.
-
-### Running an Import
-
-First use `--dry-run` to inspect package names, versions, and counts. A dry-run fetches metadata without downloading archives or writing to the destination. Archive validation and conflicts with existing data are checked during the actual import.
-
-```bash
-npmjs-server --import-packages --dry-run --package-dir ./packages
-npmjs-server --import-packages --package-dir ./packages
-```
-
-Enter the source, enumeration method, authentication method, and destination, then confirm execution. The destination prompt defaults to the directory resolved using the normal configuration precedence. Imports do not write to `proxy.packageDir`.
-
-Source authentication supports `none`, `basic`, and `bearer`. Passwords and tokens use secret input and are not saved. Credentials are sent only beneath the registry and REST API URLs you explicitly supply, and are not forwarded to other hosts or paths outside those prefixes.
-
-Stop publishing and changing tags at the source before the final comparison and cutover. After importing, start the destination and check the packages you use.
-
-```bash
-npmjs-server --package-dir ./packages
-# Check from another terminal
-npm view @myorg/client --registry http://localhost:4873/
-npm install @myorg/client --registry http://localhost:4873/
-```
-
-### Preserved Information and Retries
-
-Archives are stored without recompression. Their internal names and versions, and any checksums supplied by the source, are validated. Publication dates, READMEs, dependencies, deprecation notices, and tags such as `latest` and `next` are preserved. Tags name specific versions; a source `latest` pointing to a lower version remains unchanged. Download URLs are rewritten for the destination.
-
-Missing publication dates, READMEs, or checksums generate warnings. An unknown publication date is not replaced with the import time. If the tag information itself is missing, that package fails metadata validation. An explicitly empty tag map remains empty.
-
-Rerun with the same settings after an interruption or failure. Identical archives avoid another download where possible, while metadata and unfinished tag updates are checked again. An existing archive with the same name and version but different contents is never overwritten. The normal publishing `duplicatePackagePolicy` does not alter this conflict handling.
-
-Existing tags that point to different versions from the source are also retained and reported as conflicts. Decide tag precedence when importing multiple hosted repositories. To resolve a conflict, start the destination, use `npm dist-tag` to set the intended value, then stop it again before rerunning the import. Existing tags absent from the source are not deleted.
-
-`Imported` counts newly stored archives; `Skipped` counts identical archives. Metadata is still reconciled for `Skipped` entries. `Conflicts` counts conflicts, `Failed` counts failed operations, and `Warnings` counts unavailable supplementary information. These counts may differ from version counts because tag operations are included. Remaining conflicts or failures produce a nonzero exit status.
-
-Dependencies are not imported recursively. Include required private packages in the import inventory, and obtain public dependencies through npm configuration or the [upstream registry proxy](#upstream-npm-registry-proxy).
-
 ## Package Storage Configuration
 
 ### Storage Location
@@ -535,6 +462,87 @@ For packages available through the configured registry, npm can use this hash to
 
 Use [resolved-killer](https://github.com/kekyo/resolved-killer/) to remove these URLs from `package-lock.json` while preserving integrity verification.
 This prevents private registry URLs from being exposed through the lockfile's `resolved` fields while allowing npm to verify the downloaded packages.
+
+## Importing from an Existing Registry
+
+Use `--import-packages` to import every version of packages published directly to an existing npm registry. Stop the destination npmjs-server before running it. This mode writes to the normal `packageDir` without starting an HTTP server.
+
+### Choosing a Source
+
+Specify a URL that serves only directly published packages. Nexus 3 calls this a hosted repository. Do not use a proxy URL that caches packages from an upstream such as npmjs.org, or a group URL that combines repositories. Repository types are not detected automatically.
+
+Check that version metadata and archive downloads, as well as search results, contain only directly published content. Disabling upstream connections alone does not exclude existing cached packages. External packages manually published to hosted repositories are included.
+
+Choose the enumeration method at the `Enumeration method` prompt.
+
+| Method | Required input | Coverage |
+| --- | --- | --- |
+| `nexus` | Hosted npm URL, REST API base URL, and repository name | All packages in the specified repository |
+| `list` | Hosted-only npm URL and package name list file | Packages named in the list |
+
+For example, enter the following for Nexus 3 when not using `.npmrc`. Include any public path prefix added by your reverse proxy.
+
+```text
+Enumeration method (list/nexus): nexus
+Hosted registry URL: https://nexus.example.com/repository/npm-internal/
+Nexus REST API base URL: https://nexus.example.com/service/rest/v1/
+Nexus repository name: npm-internal
+```
+
+The Nexus method follows every page of the [Components API](https://help.sonatype.com/en/components-api.html). Credentials need read access to both that API and the hosted repository. See [Nexus npm repositories](https://help.sonatype.com/en/npm-registry.html) for hosted, proxy, and group configuration.
+
+Use `list` for other servers or when the Nexus enumeration API is unavailable. Provide a UTF-8 file containing one package name per line. Empty lines are ignored and repeated names are processed once. Versions do not need to be listed.
+
+```text
+internal-utils
+@myorg/client
+```
+
+The same hosted-only URL requirement applies to name lists. Packages absent from the list are outside the import's coverage.
+
+### Running an Import
+
+First use `--dry-run` to inspect package names, versions, and counts. A dry-run fetches metadata without downloading archives or writing to the destination. Archive validation and conflicts with existing data are checked during the actual import.
+
+```bash
+npmjs-server --import-packages --dry-run --package-dir ./packages
+npmjs-server --import-packages --package-dir ./packages
+```
+
+Choose the enumeration method first. If `$HOME/.npmrc` exists, the importer reads it, displays usable source URLs and authentication schemes, and asks whether to use them. Passwords and tokens are never displayed. If the file cannot be read or contains no usable settings, enter the settings manually.
+
+Answer `y` to skip prompts for settings supplied by `.npmrc`. If multiple registry URLs are available, select one by its displayed number. If only credentials are available, enter the source URL manually; only credentials matching that URL are used. Answer `n` or leave the answer empty to enter all settings manually, without using `.npmrc` values as defaults.
+
+Supported settings are `registry`, `@scope:registry`, and URL-scoped `_authToken`, `_auth`, or `username` with `_password`. Environment references such as `${VARIABLE_NAME}` are supported. Settings with missing required environment variables or invalid values require manual input. Project `.npmrc` files and alternate configuration such as `NPM_CONFIG_USERCONFIG` are not read, and certificate and proxy settings are not imported. See the [npm documentation](https://docs.npmjs.com/cli/v11/configuring-npm/npmrc/) for the configuration format and credential scopes.
+
+The `list` method supports `none`, `basic`, and `bearer` authentication. The `nexus` method supports `none` and `basic`. If `.npmrc` contains only Bearer credentials for a Nexus source, a valid registry URL can still be used, but you must choose the authentication method and enter any required credentials manually.
+
+Registry and Nexus REST API credentials are resolved separately for their respective URLs. If `.npmrc` supplies registry credentials but no API credentials, an additional prompt asks for API authentication. When no credentials come from `.npmrc`, manually entered source credentials are used for both URLs. Passwords and tokens use secret input and are not saved. Credentials are sent only beneath the specified URLs; credentials from `.npmrc` also retain their original scope.
+
+Enter the package list or Nexus settings required by the chosen enumeration method, any remaining settings, and the destination, then confirm execution. The destination prompt defaults to the directory resolved using the normal configuration precedence. Imports do not write to `proxy.packageDir`. Validation of `.npmrc` checks configuration values and supported combinations; network requests begin only after final confirmation. Permissions and token expiry are checked when fetching data. The importer does not modify `.npmrc`.
+
+Stop publishing and changing tags at the source before the final comparison and cutover. After importing, start the destination and check the packages you use.
+
+```bash
+npmjs-server --package-dir ./packages
+# Check from another terminal
+npm view @myorg/client --registry http://localhost:4873/
+npm install @myorg/client --registry http://localhost:4873/
+```
+
+### Preserved Information and Retries
+
+Archives are stored without recompression. Their internal names and versions, and any checksums supplied by the source, are validated. Publication dates, READMEs, dependencies, deprecation notices, and tags such as `latest` and `next` are preserved. Tags name specific versions; a source `latest` pointing to a lower version remains unchanged. Download URLs are rewritten for the destination.
+
+Missing publication dates, READMEs, or checksums generate warnings. An unknown publication date is not replaced with the import time. If the tag information itself is missing, that package fails metadata validation. An explicitly empty tag map remains empty.
+
+Rerun with the same settings after an interruption or failure. Identical archives avoid another download where possible, while metadata and unfinished tag updates are checked again. An existing archive with the same name and version but different contents is never overwritten. The normal publishing `duplicatePackagePolicy` does not alter this conflict handling.
+
+Existing tags that point to different versions from the source are also retained and reported as conflicts. Decide tag precedence when importing multiple hosted repositories. To resolve a conflict, start the destination, use `npm dist-tag` to set the intended value, then stop it again before rerunning the import. Existing tags absent from the source are not deleted.
+
+`Imported` counts newly stored archives; `Skipped` counts identical archives. Metadata is still reconciled for `Skipped` entries. `Conflicts` counts conflicts, `Failed` counts failed operations, and `Warnings` counts unavailable supplementary information. These counts may differ from version counts because tag operations are included. Remaining conflicts or failures produce a nonzero exit status.
+
+Dependencies are not imported recursively. Include required private packages in the import inventory, and obtain public dependencies through npm configuration or the [upstream registry proxy](#upstream-npm-registry-proxy).
 
 ## Reverse Proxy Interoperability
 
