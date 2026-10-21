@@ -27,6 +27,7 @@ A browser-based administration UI lets you browse packages and versions, read RE
 - Three authentication modes: no authentication, authentication for publishing, or authentication for both reading and publishing.
 - Optional two-step authentication per user, with QR registration, authenticator codes, and recovery codes.
 - Read-only upstream npm registry proxying with package caching.
+- Bulk imports from existing hosted registries, using the Nexus 3 enumeration API or a package name list.
 - Reverse proxy support through a fixed public URL or forwarded headers.
 - Run with Docker or Podman.
 
