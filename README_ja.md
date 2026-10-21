@@ -46,6 +46,7 @@ Node.jsで動作する、シンプルなプライベートNPMレジストリ
 - 用途に応じて選べる、認証なし・公開時のみ認証・読み取りを含む認証の3モード
 - ユーザーごとの二段階認証。認証アプリのQR登録、確認コード、復旧コードに対応
 - 上位npmレジストリへの読み取り専用プロキシとパッケージキャッシュ
+- 既存のhostedレジストリからの一括インポート。Nexus 3の列挙APIとパッケージ名一覧に対応
 - 固定の公開URLや転送ヘッダーを使ったリバースプロキシとの連携
 - DockerまたはPodmanでの実行
 
@@ -145,6 +146,79 @@ npm publish ./example-package-1.0.0.tgz --registry http://localhost:4873/
 `maxUploadSizeMb`で変更できます。`npm publish`はアーカイブをBase64でJSONに格納するため、アーカイブのサイズより大きな上限が必要です。
 
 ---
+
+## 既存レジストリからのインポート
+
+`--import-packages`で、既存のnpmレジストリに直接公開したパッケージを全バージョン取り込めます。移行先のnpmjs-serverを停止してから実行してください。このモードではHTTPサーバーを起動せず、通常の`packageDir`へ保存します。
+
+### 移行元の選択
+
+移行元には直接公開したパッケージだけを配信するURLを指定します。Nexus 3ではこの保存先をhostedリポジトリと呼びます。npmjs.orgなどの上流から取得したパッケージを保存するproxyや、複数リポジトリをまとめるgroupのURLは指定しないでください。リポジトリの種別は自動判定しません。
+
+検索結果だけでなく、バージョン一覧とアーカイブの取得も直接公開分に限られることを確認してください。上流への通信を止めるだけでは、保存済みキャッシュを除外できません。hostedへ手動で公開した外部パッケージは取り込み対象です。
+
+列挙方式は対話入力の`Enumeration method`で選びます。
+
+| 方式 | 入力する内容 | 対象範囲 |
+| --- | --- | --- |
+| `nexus` | hostedのnpm URL、REST APIのベースURL、リポジトリ名 | 指定リポジトリの全パッケージ |
+| `list` | hosted専用のnpm URL、パッケージ名一覧ファイル | 一覧に指定したパッケージ |
+
+Nexus 3の入力例は次のとおりです。リバースプロキシで公開パスを変更している場合は、そのパスを含めて指定します。
+
+```text
+Hosted registry URL: https://nexus.example.com/repository/npm-internal/
+Enumeration method (list/nexus): nexus
+Nexus REST API base URL: https://nexus.example.com/service/rest/v1/
+Nexus repository name: npm-internal
+```
+
+Nexus方式は[Components API](https://help.sonatype.com/en/components-api.html)を最後のページまで取得します。資格情報には、このAPIと対象hostedの両方を読み取る権限が必要です。hosted・proxy・groupの構成については[Nexusのnpmリポジトリの説明](https://help.sonatype.com/en/npm-registry.html)を参照してください。
+
+他のサーバーや、Nexusの列挙APIを使えない環境では`list`を選びます。UTF-8ファイルにパッケージ名を1行ずつ記載してください。空行は無視し、同じ名前は一度だけ処理します。バージョンの指定は不要です。
+
+```text
+internal-utils
+@myorg/client
+```
+
+名前一覧方式でも、移行元URLが直接公開分だけを配信する条件は同じです。一覧にないパッケージまで移行したとは扱いません。
+
+### 実行手順
+
+まず`--dry-run`で対象の名前・バージョン・件数を確認します。dry-runはメタデータの取得までを行い、アーカイブのダウンロードや移行先への書き込みは行いません。アーカイブの検証と既存データとの競合判定は、実際のインポート時に行います。
+
+```bash
+npmjs-server --import-packages --dry-run --package-dir ./packages
+npmjs-server --import-packages --package-dir ./packages
+```
+
+接続先、列挙方式、認証方式、保存先を順に入力し、実行を確認します。保存先の初期値には、通常起動と同じ設定の優先順位が適用されます。プロキシ用の`proxy.packageDir`には保存しません。
+
+移行元の認証は`none`、`basic`、`bearer`から選べます。パスワードとトークンは秘密入力として受け付け、保存しません。資格情報は入力したレジストリとREST APIのURL配下にだけ送信し、別のホストや対象外のパスへ転送しません。
+
+最終的な照合と切り替えの前に、移行元への公開とタグ変更も止めてください。取り込み後に移行先を起動し、利用するパッケージを確認します。
+
+```bash
+npmjs-server --package-dir ./packages
+# 別の端末で確認
+npm view @myorg/client --registry http://localhost:4873/
+npm install @myorg/client --registry http://localhost:4873/
+```
+
+### 保持する情報と再実行
+
+アーカイブは再圧縮せずに保存し、内部の名前・バージョンと、移行元が提供したチェックサムを検証します。公開日時、README、依存関係、非推奨情報と、`latest`・`next`などのタグも保持します。タグは特定バージョンへの名前付けであり、移行元の`latest`が最大バージョンを指していなくても変更しません。ダウンロードURLは移行先のURLに変わります。
+
+移行元に公開日時やREADME、チェックサムがない場合は警告します。公開日時が不明な版にインポート時刻を割り当てることはありません。タグ情報自体がない場合は、そのパッケージのメタデータ取得失敗として扱います。明示的な空のタグ一覧はそのまま保持します。
+
+中断や失敗の後は、同じ設定で再実行できます。同一内容のアーカイブは再取得を可能な範囲で省き、メタデータと未反映のタグは再確認します。アーカイブの内容が異なる同名・同版は上書きしません。通常公開の`duplicatePackagePolicy`はこの競合判定を変更しません。
+
+既存タグが移行元と異なる版を指す場合も、既存の値を維持して競合として報告します。複数のhostedを順に移す場合は、タグの優先順位を確認してください。競合を解消するときは、移行先を起動して`npm dist-tag`で意図する値に設定し、再び停止してからインポートを再実行します。移行元にない既存タグは削除しません。
+
+結果の`Imported`は新しく保存したアーカイブ数、`Skipped`は同一内容のアーカイブ数です。`Skipped`でもメタデータは反映します。`Conflicts`は競合、`Failed`は失敗した処理、`Warnings`は取得できない補足情報の件数です。タグ処理の失敗も数えるため、これらの件数はバージョン数とは一致しない場合があります。競合・失敗が残る場合の終了コードは非ゼロです。
+
+依存パッケージは再帰的に取得しません。必要なプライベートパッケージを移行対象に含め、外部の公開依存パッケージはnpm設定や[上位レジストリへのプロキシ](#上位npmレジストリへのプロキシ)で取得してください。
 
 ## パッケージストレージの設定
 
@@ -750,6 +824,8 @@ TOTPの試行回数制限は別に適用します。
 | `--proxy-package-dir <dir>` | `NPMJS_SERVER_PROXY_PACKAGE_DIR` | `proxy.packageDir` | プロキシのキャッシュ保存先 | `<configDir>/proxy-packages` |
 | `--totp-reset <username>` | — | — | サーバー停止中に指定ユーザーのTOTPをリセット | — |
 | `--auth-init` | — | — | 対話形式で管理者を作成して終了 | — |
+| `--import-packages` | — | — | サーバー停止中にhostedレジストリから対話形式で取り込む | — |
+| `--dry-run` | — | — | インポート対象の列挙のみ。移行先には書き込まない | — |
 | `-h, --help` | — | — | ヘルプを表示 | — |
 | `-V, --version` | — | — | バージョンを表示 | — |
 
