@@ -127,6 +127,7 @@ const createPackument = (
   );
   const sortedPublishedTimes = versions
     .map((metadata) => metadata.published)
+    .filter((published): published is string => published !== undefined)
     .sort();
 
   return {
@@ -140,7 +141,8 @@ const createPackument = (
       modified: sortedPublishedTimes[sortedPublishedTimes.length - 1],
       ...time,
     },
-    readme: latest.readme ?? latest.manifest.readme ?? '',
+    readme:
+      latest.packageReadme ?? latest.readme ?? latest.manifest.readme ?? '',
     maintainers: latest.manifest.maintainers ?? [],
     keywords: latest.manifest.keywords ?? [],
     license: latest.manifest.license,

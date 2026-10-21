@@ -7,6 +7,7 @@ import path from 'path';
 import semver from 'semver';
 import { createReaderWriterLock } from 'async-primitives';
 import type { Logger, DuplicatePackagePolicy } from '../types.ts';
+import { writePrivateFile } from '../utils/atomicFile.ts';
 import {
   createTarballFileName,
   encodePackageNameForPath,
@@ -22,7 +23,10 @@ export interface PackageVersionMetadata {
   version: string;
   manifest: NpmPackageManifest;
   readme?: string;
-  published: string;
+  /** Package-level README from the source, independent of a version's README. */
+  packageReadme?: string;
+  /** Source publication time, absent when an imported source did not provide it. */
+  published: string | undefined;
   shasum: string;
   integrity: string;
   tarballName: string;
@@ -103,6 +107,7 @@ export const createMetadataService = (
 ): MetadataService => {
   const packagesCache = new Map<string, PackageEntry[]>();
   const distTagsCache = new Map<string, PackageDistTags>();
+  const explicitDistTags = new Set<string>();
   let currentBaseUrl = baseUrl.replace(/\/$/, '');
   const cacheLock = createReaderWriterLock();
 
@@ -134,6 +139,11 @@ export const createMetadataService = (
     distTags: PackageDistTags
   ): PackageDistTags => {
     const filteredTags = filterExistingDistTags(entries, distTags);
+    if (
+      entries[0] &&
+      explicitDistTags.has(normalizeKey(entries[0].metadata.name))
+    )
+      return filteredTags;
     const latest = getComputedLatestVersion(entries);
     return latest ? { latest, ...filteredTags } : filteredTags;
   };
@@ -158,7 +168,11 @@ export const createMetadataService = (
     const distTagsPath = path.join(packagePath, 'dist-tags.json');
     try {
       const content = await fs.readFile(distTagsPath, 'utf-8');
-      const parsed = JSON.parse(content) as PackageDistTags;
+      const parsed = JSON.parse(content);
+      if (parsed.format === 'npmjs-server/dist-tags-v1') {
+        explicitDistTags.add(normalizeKey(entries[0]!.metadata.name));
+        return filterExistingDistTags(entries, parsed.tags);
+      }
       return withComputedLatestDistTag(entries, parsed);
     } catch {
       return withComputedLatestDistTag(entries, {});
@@ -172,6 +186,20 @@ export const createMetadataService = (
   ): Promise<void> => {
     const packagePath = getPackageRootPath(packageName);
     const distTagsPath = path.join(packagePath, 'dist-tags.json');
+    if (explicitDistTags.has(normalizeKey(packageName))) {
+      await writePrivateFile(
+        distTagsPath,
+        JSON.stringify(
+          {
+            format: 'npmjs-server/dist-tags-v1',
+            tags: filterExistingDistTags(entries, distTags),
+          },
+          null,
+          2
+        )
+      );
+      return;
+    }
     const persistableTags = getPersistableDistTags(entries, distTags);
     if (Object.keys(persistableTags).length === 0) {
       await fs.rm(distTagsPath, { force: true });
@@ -194,18 +222,23 @@ export const createMetadataService = (
     try {
       const manifestPath = path.join(versionPath, 'package.json');
       const metadataPath = path.join(versionPath, 'metadata.json');
-      const manifest = JSON.parse(
-        await fs.readFile(manifestPath, 'utf-8')
-      ) as NpmPackageManifest;
       const metadataFile = JSON.parse(
         await fs.readFile(metadataPath, 'utf-8')
       ) as {
         readme?: string;
-        published?: string;
+        packageReadme?: string;
+        published?: string | null;
+        manifest?: NpmPackageManifest;
         shasum: string;
         integrity: string;
         tarballName?: string;
       };
+      // Imports reconcile the entire metadata snapshot with one atomic file replacement.
+      const manifest =
+        metadataFile.manifest ??
+        (JSON.parse(
+          await fs.readFile(manifestPath, 'utf-8')
+        ) as NpmPackageManifest);
 
       const tarballName =
         metadataFile.tarballName ??
@@ -219,7 +252,11 @@ export const createMetadataService = (
           version: actualVersion,
           manifest,
           readme: metadataFile.readme,
-          published: metadataFile.published ?? new Date().toISOString(),
+          packageReadme: metadataFile.packageReadme,
+          published:
+            metadataFile.published === null
+              ? undefined
+              : (metadataFile.published ?? new Date().toISOString()),
           shasum: metadataFile.shasum,
           integrity: metadataFile.integrity,
           tarballName,
@@ -252,6 +289,7 @@ export const createMetadataService = (
     const entries = (
       await Promise.all(
         versionDirs.map(async (version) => {
+          if (version.startsWith('.')) return undefined;
           const versionPath = path.join(packagePath, version);
           const stat = await fs.stat(versionPath);
           if (!stat.isDirectory()) {
@@ -328,6 +366,7 @@ export const createMetadataService = (
       JSON.stringify(
         {
           readme: entry.metadata.readme,
+          packageReadme: entry.metadata.packageReadme,
           published: entry.metadata.published,
           shasum: entry.metadata.shasum,
           integrity: entry.metadata.integrity,
@@ -348,6 +387,7 @@ export const createMetadataService = (
         logger.info('Initializing npm metadata cache...');
         packagesCache.clear();
         distTagsCache.clear();
+        explicitDistTags.clear();
         await scanPackages();
         const versionCount = Array.from(packagesCache.values()).reduce(
           (sum, entries) => sum + entries.length,
