@@ -5,10 +5,10 @@
 import { createWriteStream } from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
-import { randomUUID } from 'crypto';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import type { Logger } from '../types.ts';
+import { isValidPackageVersion } from '../utils/npmPackage.ts';
 import { createPackageEntryFromTarball } from './npmPublishService.ts';
 import type {
   MetadataService,
@@ -443,14 +443,12 @@ export const createNpmProxyService = (
     }
 
     const tmpDir = path.join(packagesRoot, '.tmp');
-    const tmpPath = path.join(
-      tmpDir,
-      `${input.packageName.replace(/\//g, '_')}-${input.version}-${randomUUID()}.tgz`
-    );
+    const tarballUrl = getUpstreamTarballUrl(input.versionDocument);
+    await fs.mkdir(tmpDir, { recursive: true });
+    const downloadDir = await fs.mkdtemp(path.join(tmpDir, '.download-'));
+    const tmpPath = path.join(downloadDir, 'package.tgz');
     let versionPath: string | undefined = undefined;
     try {
-      await fs.mkdir(tmpDir, { recursive: true });
-      const tarballUrl = getUpstreamTarballUrl(input.versionDocument);
       await downloadTarballToFile(tarballUrl, tmpPath, input.signal);
 
       const tarball = await fs.readFile(tmpPath);
@@ -508,11 +506,12 @@ export const createNpmProxyService = (
       );
       return cached;
     } catch (error) {
-      await fs.rm(tmpPath, { force: true });
       if (versionPath) {
         await fs.rm(versionPath, { recursive: true, force: true });
       }
       throw error;
+    } finally {
+      await fs.rm(downloadDir, { recursive: true, force: true });
     }
   };
 
@@ -523,6 +522,17 @@ export const createNpmProxyService = (
     cacheTarball: async (
       input: CacheTarballInput
     ): Promise<PackageVersionMetadata> => {
+      if (
+        !isValidPackageVersion(input.version) ||
+        (input.versionDocument.version !== undefined &&
+          input.versionDocument.version !== input.version)
+      ) {
+        throw createNpmProxyError(
+          502,
+          'bad-gateway',
+          'Invalid upstream package version'
+        );
+      }
       const existing = metadataService.getPackageVersion(
         input.packageName,
         input.version
