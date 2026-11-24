@@ -3,14 +3,20 @@
 // License under MIT.
 
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import path from 'path';
 import semver from 'semver';
 import { createReaderWriterLock } from 'async-primitives';
 import type { Logger, DuplicatePackagePolicy } from '../types.ts';
-import { writePrivateFile } from '../utils/atomicFile.ts';
+import {
+  getWritableFileMode,
+  writeAtomicFile,
+  writePrivateFile,
+} from '../utils/atomicFile.ts';
 import {
   createTarballFileName,
   encodePackageNameForPath,
+  isValidPackageVersion,
   type NpmPackageManifest,
   packageNameToPathSegments,
 } from '../utils/npmPackage.ts';
@@ -83,8 +89,17 @@ export interface MetadataService {
   ) => Promise<void>;
   readonly deleteDistTag: (packageName: string, tag: string) => Promise<void>;
   readonly updateBaseUrl: (baseUrl: string) => Promise<void>;
+  /**
+   * Publishes an archive and its metadata under the same duplicate policy.
+   * @param entry - Validated package metadata and storage identity
+   * @param writeTarball - Writes the archive to the supplied private staging path
+   * @param policy - How to handle an existing release
+   * @param distTags - Tags to publish with the release
+   * @returns The action taken for this release
+   */
   readonly addPackageEntry: (
     entry: PackageEntry,
+    writeTarball: (filePath: string) => Promise<void>,
     policy?: DuplicatePackagePolicy,
     distTags?: PackageDistTags
   ) => Promise<{
@@ -207,10 +222,9 @@ export const createMetadataService = (
     }
 
     await fs.mkdir(packagePath, { recursive: true });
-    await fs.writeFile(
+    await writeAtomicFile(
       distTagsPath,
-      JSON.stringify(persistableTags, null, 2),
-      'utf-8'
+      JSON.stringify(persistableTags, null, 2)
     );
   };
 
@@ -240,16 +254,20 @@ export const createMetadataService = (
           await fs.readFile(manifestPath, 'utf-8')
         ) as NpmPackageManifest);
 
+      if (!isValidPackageVersion(version) || manifest.version !== version) {
+        throw new Error(
+          'Stored package version does not match a valid version directory'
+        );
+      }
       const tarballName =
         metadataFile.tarballName ??
         createTarballFileName(manifest.name || packageName, version);
       const actualName = manifest.name || packageName;
-      const actualVersion = manifest.version || version;
 
       return {
         metadata: {
           name: actualName,
-          version: actualVersion,
+          version,
           manifest,
           readme: metadataFile.readme,
           packageReadme: metadataFile.packageReadme,
@@ -264,7 +282,7 @@ export const createMetadataService = (
         },
         storage: {
           packagePathSegments: packageNameToPathSegments(actualName),
-          version: actualVersion,
+          version,
           tarballName,
         },
       };
@@ -349,13 +367,13 @@ export const createMetadataService = (
     }
   };
 
-  const writePackageEntry = async (entry: PackageEntry): Promise<void> => {
-    const versionPath = path.join(
-      packagesRoot,
-      ...entry.storage.packagePathSegments,
-      entry.metadata.version
-    );
-    await fs.mkdir(versionPath, { recursive: true });
+  const writePackageEntry = async (
+    entry: PackageEntry,
+    versionPath: string,
+    writeTarball: (filePath: string) => Promise<void>
+  ): Promise<void> => {
+    await fs.mkdir(versionPath);
+    await writeTarball(path.join(versionPath, entry.storage.tarballName));
     await fs.writeFile(
       path.join(versionPath, 'package.json'),
       JSON.stringify(entry.metadata.manifest, null, 2),
@@ -377,6 +395,77 @@ export const createMetadataService = (
       ),
       'utf-8'
     );
+  };
+
+  const storePackageEntry = async (
+    entry: PackageEntry,
+    writeTarball: (filePath: string) => Promise<void>,
+    overwrite: boolean,
+    entries: PackageEntry[],
+    tags: PackageDistTags
+  ): Promise<boolean> => {
+    const packagePath = getPackageRootPath(entry.metadata.name);
+    const versionPath = path.join(packagePath, entry.metadata.version);
+    await fs.mkdir(packagePath, { recursive: true });
+    const staging = await fs.mkdtemp(path.join(packagePath, '.publish-'));
+    const prepared = path.join(staging, 'version');
+    const rollback: Array<{ from: string; to: string }> = [];
+    let keepBackups = false;
+    try {
+      await writePackageEntry(entry, prepared, writeTarball);
+      try {
+        await fs.rename(prepared, versionPath);
+        rollback.push({ from: versionPath, to: prepared });
+      } catch (error) {
+        // A populated directory cannot be replaced by rename, including filesystem aliases.
+        if (!existsSync(versionPath)) throw error;
+        if (!overwrite) return false;
+        if (!(await fs.lstat(versionPath)).isDirectory()) throw error;
+
+        // Replace only registry files. Downloads and ancillary files such as icons
+        // keep their paths throughout an explicit overwrite.
+        for (const name of await fs.readdir(prepared)) {
+          const source = path.join(prepared, name);
+          const destination = path.join(versionPath, name);
+          const backup = path.join(staging, name);
+          const mode = await getWritableFileMode(destination);
+          if (mode !== undefined) {
+            await fs.copyFile(
+              destination,
+              backup,
+              fs.constants.COPYFILE_FICLONE
+            );
+            await fs.chmod(source, mode);
+          }
+          await fs.rename(source, destination);
+          rollback.push(
+            mode === undefined
+              ? { from: destination, to: source }
+              : { from: backup, to: destination }
+          );
+        }
+      }
+      await savePersistableDistTags(entry.metadata.name, entries, tags);
+      return true;
+    } catch (error) {
+      // Leave the backups in place if the filesystem also refuses a rollback.
+      keepBackups = true;
+      for (const { from, to } of rollback.reverse()) {
+        await fs.rename(from, to);
+      }
+      keepBackups = false;
+      throw error;
+    } finally {
+      if (!keepBackups) {
+        try {
+          await fs.rm(staging, { recursive: true, force: true });
+        } catch (error) {
+          logger.warn(
+            `Failed to remove package staging directory ${staging}: ${error}`
+          );
+        }
+      }
+    }
   };
 
   return {
@@ -503,6 +592,7 @@ export const createMetadataService = (
 
     addPackageEntry: async (
       entry: PackageEntry,
+      writeTarball: (filePath: string) => Promise<void>,
       policy: DuplicatePackagePolicy = 'error',
       distTags: PackageDistTags = { latest: entry.metadata.version }
     ): Promise<{
@@ -524,7 +614,7 @@ export const createMetadataService = (
           if (policy === 'error') {
             return {
               action: 'error',
-              message: `Package ${entry.metadata.name} version ${entry.metadata.version} already exists`,
+              message: `Package ${entry.metadata.name}@${entry.metadata.version} already exists`,
             };
           }
         }
@@ -543,21 +633,27 @@ export const createMetadataService = (
         );
         nextEntries.push(entry);
         const sortedEntries = sortEntries(nextEntries);
-        packagesCache.set(key, sortedEntries);
 
         const existingTags = distTagsCache.get(key) ?? {};
         const nextTags = withComputedLatestDistTag(sortedEntries, {
           ...existingTags,
           ...distTags,
         });
-        distTagsCache.set(key, nextTags);
-
-        await writePackageEntry(entry);
-        await savePersistableDistTags(
-          entry.metadata.name,
+        const stored = await storePackageEntry(
+          entry,
+          writeTarball,
+          existingVersion !== undefined,
           sortedEntries,
           nextTags
         );
+        if (!stored) {
+          return {
+            action: policy === 'ignore' ? 'ignored' : 'error',
+            message: `Package storage for ${entry.metadata.name}@${entry.metadata.version} already exists`,
+          };
+        }
+        packagesCache.set(key, sortedEntries);
+        distTagsCache.set(key, nextTags);
 
         logger.info(
           `Package ${existingVersion ? 'overwritten' : 'added'}: ${entry.metadata.name}@${entry.metadata.version}`

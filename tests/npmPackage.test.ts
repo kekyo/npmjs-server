@@ -54,4 +54,23 @@ describe('npm package utilities', () => {
     expect(extracted.manifest.version).toBe('1.0.0');
     expect(extracted.readme).toBe('# Example');
   });
+
+  test.each([
+    'release/candidate',
+    'release\\candidate',
+    '1.0.0%2Fpreview',
+    '1.0.0 ',
+    'latest',
+    1,
+    null,
+  ])('should reject invalid manifest version %j', async (version) => {
+    const tarball = await createPackageTarball({ name: 'pkg', version });
+    await expect(extractNpmTarball(tarball)).rejects.toThrow(/version/i);
+  });
+
+  test('should preserve prerelease and build identifiers verbatim', async () => {
+    const version = '2.0.0-rc.1+Build.007';
+    const tarball = await createPackageTarball({ name: 'pkg', version });
+    expect((await extractNpmTarball(tarball)).manifest.version).toBe(version);
+  });
 });

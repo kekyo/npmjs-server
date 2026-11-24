@@ -24,6 +24,7 @@ interface MockUpstreamRequest {
 
 interface MockUpstreamVersion {
   manifest: Record<string, any>;
+  versionKey?: string;
   tarball: Buffer;
   distOverride?: Record<string, string>;
   tarballStatus?: number;
@@ -150,7 +151,7 @@ const createMockUpstreamServer = async (
         const tarballName = createTarballFileName(name, manifestVersion);
         const dist = calculateDist(version.tarball);
         return [
-          manifestVersion,
+          version.versionKey ?? manifestVersion,
           {
             ...version.manifest,
             dist: {
@@ -593,5 +594,88 @@ describe('npm proxy cache routes', () => {
         fs.access(path.join(proxyPackageDir, packageName))
       ).rejects.toHaveProperty('code', 'ENOENT');
     }
+  });
+
+  test('should reject invalid upstream versions before downloading and preserve cached releases', async (context) => {
+    const testDir = await createTestDirectory('npm-proxy', context.task.name);
+    const upstreamPort = await getTestPort(20000);
+    const port = await getTestPort(21000);
+    const manifest = { name: 'cached', version: '1.0.0' };
+    const tarball = await createPackageTarball(manifest);
+    const pkg: MockUpstreamPackage = {
+      name: manifest.name,
+      versions: [{ manifest, tarball }],
+    };
+    upstream = await createMockUpstreamServer(upstreamPort, [pkg]);
+    const cacheDir = path.join(testDir, 'cache');
+    const packageDir = path.join(testDir, 'packages');
+    await fs.mkdir(packageDir);
+    server = await startFastifyServer(
+      {
+        port,
+        configDir: testDir,
+        packageDir,
+        authMode: 'none',
+        proxy: {
+          enabled: true,
+          packageDir: cacheDir,
+          upstreamRegistry: `http://localhost:${upstreamPort}`,
+        },
+      },
+      silentLogger
+    );
+
+    const registry = `http://localhost:${port}`;
+    const originalUrl = `${registry}/cached/-/cached-1.0.0.tgz`;
+    const original = await fetch(originalUrl);
+    expect(Buffer.from(await original.arrayBuffer())).toEqual(tarball);
+    const metadataFile = path.join(
+      cacheDir,
+      'cached',
+      '1.0.0',
+      'metadata.json'
+    );
+    const metadata = await fs.readFile(metadataFile);
+    const marker = path.join(testDir, 'outside-cache.txt');
+    await fs.writeFile(marker, 'outside the cache');
+    const outsideCache = await fs.readdir(testDir);
+
+    for (const [key, advertised] of [
+      ['preview', '2.0.0'],
+      ['2.0.0', 'preview'],
+    ] as const) {
+      pkg.versions[1] = {
+        versionKey: key,
+        manifest: { ...manifest, version: advertised },
+        tarball,
+      };
+      upstream.requests.length = 0;
+      const rejected = await fetch(
+        `${registry}/cached/-/cached-${advertised}.tgz`
+      );
+      expect(rejected.status).toBe(502);
+      expect(upstream.requests.map(({ url }) => url)).toEqual(['/cached']);
+    }
+    expect(await fs.readdir(path.join(cacheDir, 'cached'))).toEqual(['1.0.0']);
+    expect(await fs.readdir(testDir)).toEqual(outsideCache);
+    expect(await fs.readFile(marker, 'utf8')).toBe('outside the cache');
+    expect(await fs.readFile(metadataFile)).toEqual(metadata);
+    const cached = await fetch(originalUrl);
+    expect(Buffer.from(await cached.arrayBuffer())).toEqual(tarball);
+
+    const next = { name: 'cached', version: '2.0.0' };
+    pkg.versions[1] = {
+      manifest: next,
+      tarball: await createPackageTarball(next),
+    };
+    const occupied = path.join(cacheDir, 'cached', next.version);
+    await fs.mkdir(occupied);
+    const archivePath = path.join(occupied, 'cached-2.0.0.tgz');
+    const existingArchive = await createPackageTarball(next, 'existing');
+    await fs.writeFile(archivePath, existingArchive);
+    const conflict = await fetch(`${registry}/cached/-/cached-2.0.0.tgz`);
+    expect(conflict.status).toBe(502);
+    expect(await fs.readFile(archivePath)).toEqual(existingArchive);
+    expect(await fs.readdir(occupied)).toEqual(['cached-2.0.0.tgz']);
   });
 });

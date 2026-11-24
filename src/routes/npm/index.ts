@@ -329,7 +329,7 @@ const getVersionDocumentByTarballName = (
       tarballName === upstreamTarballName
     ) {
       return {
-        version: resolvedVersion,
+        version,
         versionDocument,
       };
     }
@@ -964,9 +964,11 @@ export const registerNpmRoutes = async (
       );
     } catch (error) {
       if (isNpmProxyError(error)) {
-        return reply.status(error.statusCode).send({ error: error.message });
+        await reply.status(error.statusCode).send({ error: error.message });
+      } else {
+        await reply.status(502).send({ error: 'Upstream registry error' });
       }
-      return reply.status(502).send({ error: 'Upstream registry error' });
+      return true;
     }
   };
 
@@ -1050,7 +1052,6 @@ export const registerNpmRoutes = async (
 
     const tarball = Buffer.from(data, 'base64');
     const result = await publishNpmTarball({
-      packagesRoot,
       metadataService,
       tarball,
       baseUrl: getBaseUrl(request),

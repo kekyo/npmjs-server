@@ -856,3 +856,24 @@ Pull requests are welcome. Please submit them against the `develop` branch.
 ## License
 
 Under MIT.
+
+---
+
+## History
+
+* 1.0.0
+  * Fixed a path traversal issue in package publishing. The registry now rejects invalid versions before saving uploads from npm or the web UI.
+  * Fixed a race between concurrent publishes of the same version. The `error` and `ignore` policies now preserve the accepted tarball and its metadata. Explicit overwrites retain file permissions and restore the previous version if saving dist-tags fails.
+  * The upstream proxy now rejects invalid or inconsistent version metadata before downloading a tarball and preserves existing cache files on storage conflicts.
+  * The registry now skips invalid version metadata at startup so other versions of the same package remain available.
+* 0.3.0
+  * Added `--import-packages` to import all versions of selected packages from a hosted npm registry. The importer reads a package name list or discovers packages through the Nexus 3 API.
+  * Added `--dry-run` to preview an import. The importer can also reuse registry URLs and credentials from the user's `.npmrc`.
+  * Imports preserve the original tarballs, publication dates, READMEs, and dist-tags. Rerunning an interrupted import reports conflicts and keeps the destination's existing archives and tags.
+* 0.2.0
+  * Added optional two-step authentication (TOTP) for the administration UI and `npm login`, with authenticator app enrollment, single-use recovery codes, and an offline `--totp-reset` command.
+  * Fixed the closing animation for drawers in the administration UI.
+  * Fixed parallel Podman builds and registry checks for multi-platform container images.
+* 0.1.0
+  * First release of the file-backed registry for publishing, searching, and installing scoped and unscoped npm packages.
+  * Included a web UI for package and user management, configurable authentication, and an optional upstream registry proxy with tarball caching.
