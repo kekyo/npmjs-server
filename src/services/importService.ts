@@ -5,10 +5,10 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { createHash } from 'crypto';
-import semver from 'semver';
 import type { Logger } from '../types.ts';
 import {
   isValidPackageName,
+  isValidPackageVersion,
   packageNameToPathSegments,
 } from '../utils/npmPackage.ts';
 import { writePrivateFile } from '../utils/atomicFile.ts';
@@ -251,10 +251,7 @@ export const createImportService = (options: ImportOptions): ImportService => {
           versions = object(packument.versions);
           if (
             Object.keys(versions).some(
-              (version) =>
-                !semver.valid(version) ||
-                version.includes('/') ||
-                version.includes('\\')
+              (version) => !isValidPackageVersion(version)
             )
           )
             throw new Error('Invalid version');

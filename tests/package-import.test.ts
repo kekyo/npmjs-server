@@ -366,6 +366,15 @@ describe('hosted package import', () => {
     expect(await fs.readdir(root)).toEqual([]);
   });
 
+  test('dry-run rejects versions that cannot be stored verbatim', async () => {
+    await publish('plain', ['1.0.0 '], {});
+    const result = await importer(['plain'], true).run();
+    expect(result.failed).toBe(1);
+    expect(result.targets).toEqual([]);
+    expect(requests.map((request) => request.path)).toEqual(['/hosted/plain']);
+    expect(await fs.readdir(root)).toEqual([]);
+  });
+
   test('preserves package and version READMEs separately and does not invent missing source dates', async () => {
     const doc = await publish('plain', ['1.0.0', '2.0.0'], { latest: '1.0.0' });
     (doc.versions['2.0.0'] as any).readme = '# Version README';

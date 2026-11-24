@@ -4,7 +4,12 @@ import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import { createFileItem, createTarPacker } from 'tar-vern';
-import { startFastifyServer, FastifyServerInstance } from '../src/server';
+import { createReaderWriterLock } from 'async-primitives';
+import {
+  createFastifyInstance,
+  startFastifyServer,
+  FastifyServerInstance,
+} from '../src/server.ts';
 import { createConsoleLogger } from '../src/logger';
 import { ServerConfig } from '../src/types';
 import { createUserService } from '../src/services/userService';
@@ -139,6 +144,37 @@ describe('npm registry routes', () => {
       await server.close();
       server = undefined;
     }
+  });
+
+  test('should reject invalid versions before either publish API writes package files', async (context) => {
+    const configDir = await createTestDirectory(
+      'npm-registry',
+      context.task.name
+    );
+    const packageDir = path.join(configDir, 'packages');
+    await fs.mkdir(packageDir);
+    const app = await createFastifyInstance(
+      { port: 0, configDir, packageDir, authMode: 'none' },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+
+    const manifest = { name: 'example', version: '1.0.0 ' };
+    const tarball = await createPackageTarball(manifest);
+    const npm = await app.inject({
+      method: 'PUT',
+      url: '/example',
+      payload: createPublishDocument(manifest, tarball),
+    });
+    const ui = await app.inject({
+      method: 'POST',
+      url: '/api/publish',
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: tarball,
+    });
+    expect([npm.statusCode, ui.statusCode]).toEqual([400, 400]);
+    expect(await fs.readdir(packageDir)).toEqual([]);
   });
 
   test('should publish, read, download, and tag a scoped package over HTTP', async (context) => {
