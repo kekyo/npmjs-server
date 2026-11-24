@@ -4,6 +4,7 @@
 
 import { createHash } from 'crypto';
 import { Readable } from 'stream';
+import semver from 'semver';
 import { createTarExtractor } from 'tar-vern';
 
 /**
@@ -73,6 +74,17 @@ export const buildPackageName = (
  */
 export const isValidPackageName = (packageName: string): boolean =>
   /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i.test(packageName);
+
+/**
+ * Checks whether an npm version can be used verbatim as a storage path segment.
+ * @param version - Untrusted version from a manifest or registry
+ * @returns True for a supported npm version without surrounding whitespace
+ * @remarks The semver parser trims its input and omits build metadata in its result.
+ */
+export const isValidPackageVersion = (version: unknown): version is string =>
+  typeof version === 'string' &&
+  semver.valid(version) !== null &&
+  version === version.trim();
 
 /**
  * Converts a package name into path segments under the package root.
@@ -176,8 +188,13 @@ export const extractNpmTarball = async (
     throw new Error('Package tarball does not contain package/package.json');
   }
 
-  if (!manifest.name || !manifest.version) {
-    throw new Error('package.json must contain name and version');
+  if (!manifest.name) {
+    throw new Error('package.json must contain a name');
+  }
+  if (!isValidPackageVersion(manifest.version)) {
+    throw Object.assign(new Error('Invalid package version in package.json'), {
+      statusCode: 400,
+    });
   }
 
   return { manifest, readme };

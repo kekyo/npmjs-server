@@ -736,7 +736,6 @@ export const createFastifyInstance = async (
     await fastify.register(
       async (fastify) => {
         const publishConfig: PublishRoutesConfig = {
-          packagesRoot,
           metadataService,
           authService,
           authConfig,

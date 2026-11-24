@@ -1,13 +1,19 @@
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import { createFileItem, createTarPacker } from 'tar-vern';
-import { startFastifyServer, FastifyServerInstance } from '../src/server';
+import { createReaderWriterLock } from 'async-primitives';
+import {
+  createFastifyInstance,
+  startFastifyServer,
+  FastifyServerInstance,
+} from '../src/server.ts';
 import { createConsoleLogger } from '../src/logger';
 import { ServerConfig } from '../src/types';
 import { createUserService } from '../src/services/userService';
+import { calculateDist } from '../src/utils/npmPackage.ts';
 import {
   createTestDirectory,
   getTestPort,
@@ -138,6 +144,328 @@ describe('npm registry routes', () => {
     if (server) {
       await server.close();
       server = undefined;
+    }
+  });
+
+  test('should reject invalid versions before either publish API writes package files', async (context) => {
+    const configDir = await createTestDirectory(
+      'npm-registry',
+      context.task.name
+    );
+    const packageDir = path.join(configDir, 'packages');
+    await fs.mkdir(packageDir);
+    const app = await createFastifyInstance(
+      { port: 0, configDir, packageDir, authMode: 'none' },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+
+    const manifest = { name: 'example', version: '1.0.0 ' };
+    const tarball = await createPackageTarball(manifest);
+    const npm = await app.inject({
+      method: 'PUT',
+      url: '/example',
+      payload: createPublishDocument(manifest, tarball),
+    });
+    const ui = await app.inject({
+      method: 'POST',
+      url: '/api/publish',
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: tarball,
+    });
+    expect([npm.statusCode, ui.statusCode]).toEqual([400, 400]);
+    expect(await fs.readdir(packageDir)).toEqual([]);
+  });
+
+  test.each(['error', 'ignore'] as const)(
+    'should serve the accepted archive and metadata after competing publications under %s',
+    async (policy) => {
+      const configDir = await createTestDirectory(
+        'npm-registry',
+        `competing-publications-${policy}`
+      );
+      const packageDir = path.join(configDir, 'packages');
+      await fs.mkdir(packageDir);
+      const app = await createFastifyInstance(
+        { port: 0, configDir, packageDir, duplicatePackagePolicy: policy },
+        silentLogger,
+        createReaderWriterLock()
+      );
+      server = app;
+      const version = '1.2.3-rc.1+Build.007';
+      const manifests = ['first', 'second'].map((description) => ({
+        name: 'example',
+        version,
+        description,
+      }));
+      const archives = await Promise.all(
+        manifests.map((manifest) => createPackageTarball(manifest))
+      );
+      const responses = await Promise.all(
+        archives.map((archive) =>
+          app.inject({
+            method: 'POST',
+            url: '/api/publish',
+            headers: { 'content-type': 'application/octet-stream' },
+            payload: archive,
+          })
+        )
+      );
+      const accepted = responses.findIndex(
+        (response) => response.statusCode === 201
+      );
+      expect(accepted).toBeGreaterThanOrEqual(0);
+      expect(responses[1 - accepted]!.statusCode).toBe(
+        policy === 'ignore' ? 200 : 409
+      );
+      const packument = (await app.inject('/example')).json();
+      const document = packument.versions[version];
+      expect(document.description).toBe(manifests[accepted]!.description);
+      const downloadUrl = new URL(document.dist.tarball).pathname;
+      expect((await app.inject(downloadUrl)).rawPayload).toEqual(
+        archives[accepted]
+      );
+
+      const invalid = { name: 'example', version: version + ' ' };
+      const bytes = await createPackageTarball(invalid);
+      expect(
+        (
+          await app.inject({
+            method: 'PUT',
+            url: '/example',
+            payload: createPublishDocument(invalid, bytes),
+          })
+        ).statusCode
+      ).toBe(400);
+      expect((await app.inject('/example')).json()).toEqual(packument);
+      expect((await app.inject(downloadUrl)).rawPayload).toEqual(
+        archives[accepted]
+      );
+    }
+  );
+
+  test('should preserve an occupied version directory missing from the metadata index', async (context) => {
+    const configDir = await createTestDirectory(
+      'npm-registry',
+      context.task.name
+    );
+    const packageDir = path.join(configDir, 'packages');
+    await fs.mkdir(packageDir);
+    const app = await createFastifyInstance(
+      { port: 0, configDir, packageDir },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+    const manifest = { name: 'example', version: '1.0.0' };
+    const versionDir = path.join(packageDir, manifest.name, manifest.version);
+    await fs.mkdir(versionDir, { recursive: true });
+    const archivePath = path.join(versionDir, 'example-1.0.0.tgz');
+    const original = await createPackageTarball(manifest, 'original');
+    await fs.writeFile(archivePath, original);
+
+    const replacement = await createPackageTarball(manifest, 'replacement');
+    const rejected = await app.inject({
+      method: 'PUT',
+      url: '/example',
+      payload: createPublishDocument(manifest, replacement),
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(await fs.readFile(archivePath)).toEqual(original);
+    expect(await fs.readdir(versionDir)).toEqual(['example-1.0.0.tgz']);
+  });
+
+  test('should serve valid releases beside invalid stored version metadata after restart', async (context) => {
+    const configDir = await createTestDirectory(
+      'npm-registry',
+      context.task.name
+    );
+    const packageDir = path.join(configDir, 'packages');
+    const name = 'example';
+    const version = '1.0.0';
+    const tarball = await createPackageTarball({ name, version });
+    const metadata = JSON.stringify(calculateDist(tarball));
+    for (const [directory, recorded] of [
+      [version, version],
+      ['preview', 'preview'],
+      ['2.0.0', '3.0.0'],
+    ] as const) {
+      const destination = path.join(packageDir, name, directory);
+      await fs.mkdir(destination, { recursive: true });
+      await fs.writeFile(
+        path.join(destination, 'package.json'),
+        JSON.stringify({ name, version: recorded })
+      );
+      await fs.writeFile(path.join(destination, 'metadata.json'), metadata);
+    }
+    await fs.writeFile(
+      path.join(packageDir, name, version, 'example-1.0.0.tgz'),
+      tarball
+    );
+    const app = await createFastifyInstance(
+      { port: 0, configDir, packageDir },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+    const packument = (await app.inject('/example')).json();
+    expect(Object.keys(packument.versions ?? {})).toEqual([version]);
+    const url = new URL(packument.versions[version].dist.tarball).pathname;
+    expect((await app.inject(url)).rawPayload).toEqual(tarball);
+  });
+
+  test('should keep the previous release available if an explicit overwrite fails and allow a retry', async (context) => {
+    const configDir = await createTestDirectory(
+      'npm-registry',
+      context.task.name
+    );
+    const packageDir = path.join(configDir, 'packages');
+    await fs.mkdir(packageDir);
+    const app = await createFastifyInstance(
+      { port: 0, configDir, packageDir, duplicatePackagePolicy: 'overwrite' },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+    const publish = async (name: string, description: string) => {
+      const tarball = await createPackageTarball({
+        name,
+        version: '1.0.0',
+        description,
+      });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/publish',
+        headers: { 'content-type': 'application/octet-stream' },
+        payload: tarball,
+      });
+      return { tarball, response };
+    };
+    const original = await publish('example', 'original');
+    expect(original.response.statusCode).toBe(201);
+    const metadata = (await app.inject('/example')).json();
+    const url = new URL(metadata.versions['1.0.0'].dist.tarball).pathname;
+    const icon = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+    await fs.writeFile(
+      path.join(packageDir, 'example', '1.0.0', 'icon.svg'),
+      icon
+    );
+    const tagsPath = path.join(packageDir, 'example', 'dist-tags.json');
+    await fs.mkdir(tagsPath);
+    expect(
+      (await publish('example', 'replacement')).response.statusCode
+    ).toBeGreaterThanOrEqual(400);
+    expect((await app.inject('/example')).json()).toEqual(metadata);
+    expect((await app.inject(url)).rawPayload).toEqual(original.tarball);
+
+    await fs.rmdir(tagsPath);
+    const replaced = await publish('example', 'replacement');
+    expect(replaced.response.statusCode).toBe(201);
+    expect((await app.inject(url)).rawPayload).toEqual(replaced.tarball);
+    expect((await app.inject('/example/1.0.0')).json().description).toBe(
+      'replacement'
+    );
+    expect((await app.inject('/api/ui/icon/example/1.0.0')).body).toBe(icon);
+    const recased = await publish('Example', 'recased');
+    expect(recased.response.statusCode).toBe(201);
+    const recasedInfo = (await app.inject('/Example/1.0.0')).json();
+    expect(
+      (await app.inject(new URL(recasedInfo.dist.tarball).pathname)).rawPayload
+    ).toEqual(recased.tarball);
+  });
+
+  test.skipIf(process.platform === 'win32')(
+    'should preserve registry file permissions during an overwrite',
+    async (context) => {
+      const configDir = await createTestDirectory(
+        'npm-registry',
+        context.task.name
+      );
+      const packageDir = path.join(configDir, 'packages');
+      await fs.mkdir(packageDir);
+      const app = await createFastifyInstance(
+        { port: 0, configDir, packageDir, duplicatePackagePolicy: 'overwrite' },
+        silentLogger,
+        createReaderWriterLock()
+      );
+      server = app;
+      const manifest = { name: 'example', version: '1.0.0' };
+      const tarball = await createPackageTarball(manifest);
+      const document = createPublishDocument(manifest, tarball);
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/example',
+        payload: {
+          ...document,
+          'dist-tags': { latest: manifest.version, beta: manifest.version },
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      const tags = path.join(packageDir, 'example', 'dist-tags.json');
+      const metadata = path.join(
+        packageDir,
+        'example',
+        '1.0.0',
+        'metadata.json'
+      );
+      expect((await fs.stat(tags)).mode & 0o777).toBe(0o666 & ~process.umask());
+      await fs.chmod(tags, 0o640);
+      await fs.chmod(metadata, 0o600);
+      const overwrite = {
+        method: 'POST',
+        url: '/api/publish',
+        headers: { 'content-type': 'application/octet-stream' },
+        payload: await createPackageTarball(manifest, 'replacement'),
+      } as const;
+      expect((await app.inject(overwrite)).statusCode).toBe(201);
+      expect((await fs.stat(tags)).mode & 0o777).toBe(0o640);
+      expect((await fs.stat(metadata)).mode & 0o777).toBe(0o600);
+      if (process.getuid?.() !== 0) {
+        await fs.chmod(metadata, 0o400);
+        expect((await app.inject(overwrite)).statusCode).toBeGreaterThanOrEqual(
+          400
+        );
+      }
+    }
+  );
+
+  test('should serve a committed release when staging cleanup fails', async (context) => {
+    const configDir = await createTestDirectory(
+      'npm-registry',
+      context.task.name
+    );
+    const packageDir = path.join(configDir, 'packages');
+    await fs.mkdir(packageDir);
+    const app = await createFastifyInstance(
+      { port: 0, configDir, packageDir },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+    const manifest = { name: 'example', version: '1.0.0' };
+    const tarball = await createPackageTarball(manifest);
+    const rm = fs.rm.bind(fs);
+    const cleanup = vi
+      .spyOn(fs, 'rm')
+      .mockImplementation(async (destination, options) => {
+        if (options?.recursive)
+          throw Object.assign(new Error('Directory busy'), { code: 'EBUSY' });
+        await rm(destination, options);
+      });
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/example',
+        payload: createPublishDocument(manifest, tarball),
+      });
+      expect(response.statusCode).toBe(201);
+      const info = (await app.inject('/example/1.0.0')).json();
+      expect(
+        (await app.inject(new URL(info.dist.tarball).pathname)).rawPayload
+      ).toEqual(tarball);
+    } finally {
+      cleanup.mockRestore();
     }
   });
 

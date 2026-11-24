@@ -18,7 +18,6 @@ import { createUrlResolver } from '../../../utils/urlResolver.ts';
  * Configuration for UI package publish routes.
  */
 export interface PublishRoutesConfig {
-  packagesRoot: string;
   metadataService: MetadataService;
   authService: AuthService;
   authConfig: FastifyAuthConfig;
@@ -44,7 +43,6 @@ export const registerPublishRoutes = async (
   config: PublishRoutesConfig
 ) => {
   const {
-    packagesRoot,
     metadataService,
     authService,
     authConfig,
@@ -87,7 +85,6 @@ export const registerPublishRoutes = async (
 
         const baseUrl = urlResolver.resolveUrl(request).baseUrl;
         const result = await publishNpmTarball({
-          packagesRoot,
           metadataService,
           tarball: packageData,
           baseUrl,
