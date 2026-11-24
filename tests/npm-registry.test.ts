@@ -13,6 +13,7 @@ import {
 import { createConsoleLogger } from '../src/logger';
 import { ServerConfig } from '../src/types';
 import { createUserService } from '../src/services/userService';
+import { calculateDist } from '../src/utils/npmPackage.ts';
 import {
   createTestDirectory,
   getTestPort,
@@ -273,6 +274,45 @@ describe('npm registry routes', () => {
     expect(rejected.statusCode).toBe(409);
     expect(await fs.readFile(archivePath)).toEqual(original);
     expect(await fs.readdir(versionDir)).toEqual(['example-1.0.0.tgz']);
+  });
+
+  test('should serve valid releases beside invalid stored version metadata after restart', async (context) => {
+    const configDir = await createTestDirectory(
+      'npm-registry',
+      context.task.name
+    );
+    const packageDir = path.join(configDir, 'packages');
+    const name = 'example';
+    const version = '1.0.0';
+    const tarball = await createPackageTarball({ name, version });
+    const metadata = JSON.stringify(calculateDist(tarball));
+    for (const [directory, recorded] of [
+      [version, version],
+      ['preview', 'preview'],
+      ['2.0.0', '3.0.0'],
+    ] as const) {
+      const destination = path.join(packageDir, name, directory);
+      await fs.mkdir(destination, { recursive: true });
+      await fs.writeFile(
+        path.join(destination, 'package.json'),
+        JSON.stringify({ name, version: recorded })
+      );
+      await fs.writeFile(path.join(destination, 'metadata.json'), metadata);
+    }
+    await fs.writeFile(
+      path.join(packageDir, name, version, 'example-1.0.0.tgz'),
+      tarball
+    );
+    const app = await createFastifyInstance(
+      { port: 0, configDir, packageDir },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+    const packument = (await app.inject('/example')).json();
+    expect(Object.keys(packument.versions ?? {})).toEqual([version]);
+    const url = new URL(packument.versions[version].dist.tarball).pathname;
+    expect((await app.inject(url)).rawPayload).toEqual(tarball);
   });
 
   test('should keep the previous release available if an explicit overwrite fails and allow a retry', async (context) => {

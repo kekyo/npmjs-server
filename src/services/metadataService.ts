@@ -12,6 +12,7 @@ import { writePrivateFile } from '../utils/atomicFile.ts';
 import {
   createTarballFileName,
   encodePackageNameForPath,
+  isValidPackageVersion,
   type NpmPackageManifest,
   packageNameToPathSegments,
 } from '../utils/npmPackage.ts';
@@ -249,16 +250,20 @@ export const createMetadataService = (
           await fs.readFile(manifestPath, 'utf-8')
         ) as NpmPackageManifest);
 
+      if (!isValidPackageVersion(version) || manifest.version !== version) {
+        throw new Error(
+          'Stored package version does not match a valid version directory'
+        );
+      }
       const tarballName =
         metadataFile.tarballName ??
         createTarballFileName(manifest.name || packageName, version);
       const actualName = manifest.name || packageName;
-      const actualVersion = manifest.version || version;
 
       return {
         metadata: {
           name: actualName,
-          version: actualVersion,
+          version,
           manifest,
           readme: metadataFile.readme,
           packageReadme: metadataFile.packageReadme,
@@ -273,7 +278,7 @@ export const createMetadataService = (
         },
         storage: {
           packagePathSegments: packageNameToPathSegments(actualName),
-          version: actualVersion,
+          version,
           tarballName,
         },
       };
