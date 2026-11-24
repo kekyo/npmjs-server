@@ -8,7 +8,11 @@ import path from 'path';
 import semver from 'semver';
 import { createReaderWriterLock } from 'async-primitives';
 import type { Logger, DuplicatePackagePolicy } from '../types.ts';
-import { writePrivateFile } from '../utils/atomicFile.ts';
+import {
+  getWritableFileMode,
+  writeAtomicFile,
+  writePrivateFile,
+} from '../utils/atomicFile.ts';
 import {
   createTarballFileName,
   encodePackageNameForPath,
@@ -218,7 +222,7 @@ export const createMetadataService = (
     }
 
     await fs.mkdir(packagePath, { recursive: true });
-    await writePrivateFile(
+    await writeAtomicFile(
       distTagsPath,
       JSON.stringify(persistableTags, null, 2)
     );
@@ -424,20 +428,21 @@ export const createMetadataService = (
           const source = path.join(prepared, name);
           const destination = path.join(versionPath, name);
           const backup = path.join(staging, name);
-          let undo = { from: backup, to: destination };
-          try {
+          const mode = await getWritableFileMode(destination);
+          if (mode !== undefined) {
             await fs.copyFile(
               destination,
               backup,
               fs.constants.COPYFILE_FICLONE
             );
-          } catch (copyError) {
-            if ((copyError as NodeJS.ErrnoException).code !== 'ENOENT')
-              throw copyError;
-            undo = { from: destination, to: source };
+            await fs.chmod(source, mode);
           }
           await fs.rename(source, destination);
-          rollback.push(undo);
+          rollback.push(
+            mode === undefined
+              ? { from: destination, to: source }
+              : { from: backup, to: destination }
+          );
         }
       }
       await savePersistableDistTags(entry.metadata.name, entries, tags);

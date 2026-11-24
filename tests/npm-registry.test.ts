@@ -375,6 +375,61 @@ describe('npm registry routes', () => {
     ).toEqual(recased.tarball);
   });
 
+  test.skipIf(process.platform === 'win32')(
+    'should preserve registry file permissions during an overwrite',
+    async (context) => {
+      const configDir = await createTestDirectory(
+        'npm-registry',
+        context.task.name
+      );
+      const packageDir = path.join(configDir, 'packages');
+      await fs.mkdir(packageDir);
+      const app = await createFastifyInstance(
+        { port: 0, configDir, packageDir, duplicatePackagePolicy: 'overwrite' },
+        silentLogger,
+        createReaderWriterLock()
+      );
+      server = app;
+      const manifest = { name: 'example', version: '1.0.0' };
+      const tarball = await createPackageTarball(manifest);
+      const document = createPublishDocument(manifest, tarball);
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/example',
+        payload: {
+          ...document,
+          'dist-tags': { latest: manifest.version, beta: manifest.version },
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      const tags = path.join(packageDir, 'example', 'dist-tags.json');
+      const metadata = path.join(
+        packageDir,
+        'example',
+        '1.0.0',
+        'metadata.json'
+      );
+      expect((await fs.stat(tags)).mode & 0o777).toBe(0o666 & ~process.umask());
+      await fs.chmod(tags, 0o640);
+      await fs.chmod(metadata, 0o600);
+      const overwrite = {
+        method: 'POST',
+        url: '/api/publish',
+        headers: { 'content-type': 'application/octet-stream' },
+        payload: await createPackageTarball(manifest, 'replacement'),
+      } as const;
+      expect((await app.inject(overwrite)).statusCode).toBe(201);
+      expect((await fs.stat(tags)).mode & 0o777).toBe(0o640);
+      expect((await fs.stat(metadata)).mode & 0o777).toBe(0o600);
+      if (process.getuid?.() !== 0) {
+        await fs.chmod(metadata, 0o400);
+        expect((await app.inject(overwrite)).statusCode).toBeGreaterThanOrEqual(
+          400
+        );
+      }
+    }
+  );
+
   test('should serve a committed release when staging cleanup fails', async (context) => {
     const configDir = await createTestDirectory(
       'npm-registry',
