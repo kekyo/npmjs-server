@@ -434,20 +434,11 @@ export const createNpmProxyService = (
   const cacheTarballCore = async (
     input: CacheTarballInput
   ): Promise<PackageVersionMetadata> => {
-    const existing = metadataService.getPackageEntry(
-      input.packageName,
-      input.version
-    );
-    if (existing) {
-      return existing.metadata;
-    }
-
     const tmpDir = path.join(packagesRoot, '.tmp');
     const tarballUrl = getUpstreamTarballUrl(input.versionDocument);
     await fs.mkdir(tmpDir, { recursive: true });
     const downloadDir = await fs.mkdtemp(path.join(tmpDir, '.download-'));
     const tmpPath = path.join(downloadDir, 'package.tgz');
-    let versionPath: string | undefined = undefined;
     try {
       await downloadTarballToFile(tarballUrl, tmpPath, input.signal);
 
@@ -472,20 +463,9 @@ export const createNpmProxyService = (
       entry = mergeUpstreamVersionDocument(entry, input.versionDocument);
       entry.metadata.published = getPublishedTime(input, entry);
 
-      versionPath = path.join(
-        packagesRoot,
-        ...entry.storage.packagePathSegments,
-        entry.metadata.version
-      );
-      const finalTarballPath = path.join(
-        versionPath,
-        entry.storage.tarballName
-      );
-      await fs.mkdir(versionPath, { recursive: true });
-      await fs.rename(tmpPath, finalTarballPath);
-
       const addResult = await metadataService.addPackageEntry(
         entry,
+        async (filePath) => await fs.rename(tmpPath, filePath),
         'ignore',
         input.distTags
       );
@@ -505,11 +485,6 @@ export const createNpmProxyService = (
         `npm proxy package cached: ${input.packageName}@${input.version}`
       );
       return cached;
-    } catch (error) {
-      if (versionPath) {
-        await fs.rm(versionPath, { recursive: true, force: true });
-      }
-      throw error;
     } finally {
       await fs.rm(downloadDir, { recursive: true, force: true });
     }

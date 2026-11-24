@@ -3,7 +3,6 @@
 // License under MIT.
 
 import fs from 'fs/promises';
-import path from 'path';
 import type { DuplicatePackagePolicy, Logger } from '../types.ts';
 import {
   calculateDist,
@@ -88,7 +87,6 @@ export const createPackageEntryFromTarball = async (
  * @returns Publish result
  */
 export const publishNpmTarball = async (input: {
-  packagesRoot: string;
   metadataService: MetadataService;
   tarball: Buffer;
   baseUrl: string;
@@ -99,7 +97,6 @@ export const publishNpmTarball = async (input: {
   signal?: AbortSignal;
 }): Promise<PublishNpmPackageResult> => {
   const {
-    packagesRoot,
     metadataService,
     tarball,
     baseUrl,
@@ -117,40 +114,9 @@ export const publishNpmTarball = async (input: {
     );
   }
 
-  const existing = metadataService.getPackageEntry(
-    entry.metadata.name,
-    entry.metadata.version
-  );
-  if (existing && policy === 'error') {
-    return {
-      action: 'error',
-      name: entry.metadata.name,
-      version: entry.metadata.version,
-      message: `Package ${entry.metadata.name}@${entry.metadata.version} already exists`,
-    };
-  }
-  if (existing && policy === 'ignore') {
-    return {
-      action: 'ignored',
-      name: entry.metadata.name,
-      version: entry.metadata.version,
-      message: 'Package already exists and was ignored',
-    };
-  }
-
-  const versionPath = path.join(
-    packagesRoot,
-    ...entry.storage.packagePathSegments,
-    entry.metadata.version
-  );
-  await fs.mkdir(versionPath, { recursive: true });
-  await fs.writeFile(
-    path.join(versionPath, entry.storage.tarballName),
-    tarball
-  );
-
   const addResult = await metadataService.addPackageEntry(
     entry,
+    async (filePath) => await fs.writeFile(filePath, tarball),
     policy,
     distTags
   );
@@ -176,6 +142,8 @@ export const publishNpmTarball = async (input: {
     message:
       addResult.action === 'overwritten'
         ? 'Package uploaded successfully (replaced existing version)'
-        : 'Package uploaded successfully',
+        : addResult.action === 'ignored'
+          ? 'Package already exists and was ignored'
+          : 'Package uploaded successfully',
   };
 };

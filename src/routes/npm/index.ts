@@ -1052,7 +1052,6 @@ export const registerNpmRoutes = async (
 
     const tarball = Buffer.from(data, 'base64');
     const result = await publishNpmTarball({
-      packagesRoot,
       metadataService,
       tarball,
       baseUrl: getBaseUrl(request),

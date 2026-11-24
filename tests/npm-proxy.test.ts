@@ -636,6 +636,8 @@ describe('npm proxy cache routes', () => {
       'metadata.json'
     );
     const metadata = await fs.readFile(metadataFile);
+    const marker = path.join(testDir, 'outside-cache.txt');
+    await fs.writeFile(marker, 'outside the cache');
     const outsideCache = await fs.readdir(testDir);
 
     for (const [key, advertised] of [
@@ -656,8 +658,24 @@ describe('npm proxy cache routes', () => {
     }
     expect(await fs.readdir(path.join(cacheDir, 'cached'))).toEqual(['1.0.0']);
     expect(await fs.readdir(testDir)).toEqual(outsideCache);
+    expect(await fs.readFile(marker, 'utf8')).toBe('outside the cache');
     expect(await fs.readFile(metadataFile)).toEqual(metadata);
     const cached = await fetch(originalUrl);
     expect(Buffer.from(await cached.arrayBuffer())).toEqual(tarball);
+
+    const next = { name: 'cached', version: '2.0.0' };
+    pkg.versions[1] = {
+      manifest: next,
+      tarball: await createPackageTarball(next),
+    };
+    const occupied = path.join(cacheDir, 'cached', next.version);
+    await fs.mkdir(occupied);
+    const archivePath = path.join(occupied, 'cached-2.0.0.tgz');
+    const existingArchive = await createPackageTarball(next, 'existing');
+    await fs.writeFile(archivePath, existingArchive);
+    const conflict = await fetch(`${registry}/cached/-/cached-2.0.0.tgz`);
+    expect(conflict.status).toBe(502);
+    expect(await fs.readFile(archivePath)).toEqual(existingArchive);
+    expect(await fs.readdir(occupied)).toEqual(['cached-2.0.0.tgz']);
   });
 });
