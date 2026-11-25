@@ -4,6 +4,7 @@
 
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { createSemaphore } from 'async-primitives';
+import { matchesLegacyCredential } from './legacyCredentials.ts';
 
 /**
  * Generates a random salt for password hashing
@@ -78,8 +79,10 @@ export const verifyPassword = async (
   hash: string,
   salt: string
 ): Promise<boolean> =>
-  hash.startsWith(passwordPrefix) &&
-  matchesDigest(hash, passwordPrefix, await derivePassword(password, salt));
+  typeof hash === 'string' &&
+  (hash.startsWith(passwordPrefix)
+    ? matchesDigest(hash, passwordPrefix, await derivePassword(password, salt))
+    : matchesLegacyCredential(password, hash, salt));
 
 /**
  * Computes a lookup digest for a randomly generated registry token.
@@ -88,6 +91,14 @@ export const verifyPassword = async (
  */
 export const npmTokenDigest = (token: string): Buffer =>
   createHash('sha256').update(token).digest();
+
+/**
+ * Encodes a token digest for storage on issuance or migration.
+ * @param digest - Digest of the presented npm token.
+ * @returns Versioned SHA-256 token hash.
+ */
+export const encodeNpmTokenDigest = (digest: Buffer): string =>
+  'sha256$' + digest.toString('hex');
 
 /**
  * Checks a stored token record using a fixed-length comparison.

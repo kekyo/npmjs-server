@@ -6,6 +6,10 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'path';
 import { createReaderWriterLock } from 'async-primitives';
 import type { Logger, ServerConfig } from '../types.ts';
+import {
+  isLegacyCredentialHash,
+  matchesLegacyCredential,
+} from '../utils/legacyCredentials.ts';
 import { writePrivateFile } from '../utils/atomicFile.ts';
 import {
   generateSalt,
@@ -13,6 +17,7 @@ import {
   verifyPassword,
   generateNpmToken,
   npmTokenDigest,
+  encodeNpmTokenDigest,
   matchesNpmToken,
   generateNpmTokenKey,
   generateUserId,
@@ -29,6 +34,8 @@ export interface NpmToken {
   key: string;
   label: string;
   tokenHash: string;
+  /** Salt on legacy records, removed when the token is first used. */
+  salt?: string;
   createdAt: string;
   lastUsedAt?: string;
 }
@@ -47,6 +54,8 @@ export interface User {
   updatedAt: string;
   /** Revision used to invalidate sessions and pending authentication. */
   authVersion?: number;
+  /** Reminds the user to choose a new password after a transparent hash upgrade. */
+  passwordChangeRecommended?: true;
   /** Confirmed second factor; omitted until registration is complete. */
   totp?: TotpCredentials;
 }
@@ -469,6 +478,20 @@ export const createUserService = (config: UserServiceConfig): UserService => {
       let credential: { salt: string; passwordHash: string } | undefined;
       if ('password' in updates) {
         validatePassword(updates.password, username);
+        if (
+          (original.passwordChangeRecommended ||
+            isLegacyCredentialHash(original.passwordHash)) &&
+          (await verifyPassword(
+            updates.password,
+            original.passwordHash,
+            original.salt
+          ))
+        ) {
+          throw Object.assign(
+            new Error('Choose a password different from the current password'),
+            { statusCode: 400 }
+          );
+        }
         const salt = generateSalt();
         credential = {
           salt,
@@ -492,7 +515,10 @@ export const createUserService = (config: UserServiceConfig): UserService => {
             user.role = updates.role;
           }
 
-          if (credential) Object.assign(user, credential);
+          if (credential) {
+            Object.assign(user, credential);
+            delete user.passwordChangeRecommended;
+          }
 
           user.updatedAt = new Date().toISOString();
           user.authVersion = (user.authVersion ?? 0) + 1;
@@ -547,10 +573,34 @@ export const createUserService = (config: UserServiceConfig): UserService => {
 
       if (!(await verifyPassword(password, user.passwordHash, user.salt)))
         return undefined;
-      const current = await service.getUser(username);
-      return current?.id === user.id && current.authVersion === user.authVersion
-        ? current
-        : undefined;
+      if (!isLegacyCredentialHash(user.passwordHash)) {
+        const current = await service.getUser(username);
+        return current && matchesRevision(current, user) ? current : undefined;
+      }
+
+      // Derive outside the writer lock. A reset or deletion always wins over a
+      // conversion started with a previous credential revision.
+      const salt = generateSalt();
+      const passwordHash = await hashPassword(password, salt);
+      const handle = await fileLock.writeLock();
+      try {
+        const current = users.get(username);
+        if (!current || !matchesRevision(current, user)) return undefined;
+        // Another login may already have upgraded this exact password.
+        if (
+          current.passwordHash === user.passwordHash &&
+          current.salt === user.salt
+        ) {
+          await persistUsersMutation(() => {
+            current.passwordHash = passwordHash;
+            current.salt = salt;
+            current.passwordChangeRecommended = true;
+          });
+        }
+        return cloneUser(current);
+      } finally {
+        handle.release();
+      }
     },
 
     /**
@@ -634,7 +684,7 @@ export const createUserService = (config: UserServiceConfig): UserService => {
           }
 
           const token = generateNpmToken();
-          const tokenHash = 'sha256$' + npmTokenDigest(token).toString('hex');
+          const tokenHash = encodeNpmTokenDigest(npmTokenDigest(token));
           const now = new Date().toISOString();
           const key = generateNpmTokenKey();
 
@@ -720,14 +770,22 @@ export const createUserService = (config: UserServiceConfig): UserService => {
       try {
         for (const user of users.values()) {
           for (const npmToken of user.npmTokens ?? []) {
-            if (matchesNpmToken(npmToken.tokenHash, digest)) {
-              await persistUsersMutation(() => {
-                npmToken.lastUsedAt = new Date().toISOString();
-                user.updatedAt = npmToken.lastUsedAt;
-                return undefined;
-              });
-              return user;
-            }
+            const legacy = matchesLegacyCredential(
+              token,
+              npmToken.tokenHash,
+              npmToken.salt
+            );
+            if (!legacy && !matchesNpmToken(npmToken.tokenHash, digest))
+              continue;
+            await persistUsersMutation(() => {
+              if (legacy) {
+                npmToken.tokenHash = encodeNpmTokenDigest(digest);
+                delete npmToken.salt;
+              }
+              npmToken.lastUsedAt = new Date().toISOString();
+              user.updatedAt = npmToken.lastUsedAt;
+            });
+            return cloneUser(user);
           }
         }
 

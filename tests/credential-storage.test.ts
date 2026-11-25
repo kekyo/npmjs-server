@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rmdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { hashPassword } from '../src/utils/crypto.ts';
@@ -71,9 +71,8 @@ it('bounds queued password work and reports temporary overload', async () => {
   );
 }, 30_000);
 
-it('separates human passwords from random bearer tokens and rejects obsolete credentials', async () => {
+it('separates human passwords from random bearer tokens and rejects stale account revisions', async () => {
   const dir = await createTestDirectory('credentials', 'formats');
-  const file = join(dir, 'users.json');
   const users = createUserService({
     configDir: dir,
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -103,16 +102,6 @@ it('separates human passwords from random bearer tokens and rejects obsolete cre
     expect(
       await users.validateCredentials('alice', token.token)
     ).toBeUndefined();
-    const records = JSON.parse(await readFile(file, 'utf8'));
-    // Fixed records for the same password and a previously issued token.
-    records[0].salt = records[0].npmTokens[0].salt = 'legacy-salt';
-    records[0].passwordHash = 'SOvUmqH2BOLjR7bnt38nsurOooc=';
-    records[0].npmTokens[0].tokenHash = 'aTy4FwQS0BXd7NhDZA4YVA/r4mE=';
-    await writeFile(file, JSON.stringify(records));
-    users.destroy();
-    await users.initialize();
-    expect(await users.validateCredentials('alice', password)).toBeUndefined();
-    expect(await users.validateNpmToken('npmjs_fixture')).toBeUndefined();
     await users.updateUser('alice', { password: 'new-example-password' });
     expect(
       (await users.validateCredentials('alice', 'new-example-password'))?.id
@@ -132,5 +121,194 @@ it('separates human passwords from random bearer tokens and rejects obsolete cre
     );
   } finally {
     users.destroy();
+  }
+});
+
+it('upgrades a verified legacy password once and retains the change reminder across restarts', async () => {
+  const dir = await createTestDirectory('credentials', 'legacy password');
+  const file = join(dir, 'users.json');
+  const original = {
+    id: 'legacy-id',
+    username: 'alice',
+    role: 'publish',
+    salt: 'legacy-salt',
+    passwordHash: 'SOvUmqH2BOLjR7bnt38nsurOooc=',
+    authVersion: 7,
+    createdAt: '',
+    updatedAt: '',
+    totp: {
+      encryptedSecret: 'offline fixture',
+      recoveryCodeHashes: [],
+      lastUsedStep: 9,
+      enabledAt: '',
+    },
+  };
+  await writeFile(file, JSON.stringify([original]));
+  const users = createUserService({
+    configDir: dir,
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    serverConfig: { port: 0, passwordStrengthCheck: false },
+  });
+  try {
+    await users.initialize();
+    expect(
+      await users.validateCredentials('alice', 'wrong-password')
+    ).toBeUndefined();
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual([original]);
+    const attempts = await Promise.all([
+      users.validateCredentials('alice', 'example-password'),
+      users.validateCredentials('alice', 'example-password'),
+    ]);
+    for (const who of attempts)
+      expect(who).toMatchObject({
+        id: original.id,
+        authVersion: 7,
+        passwordChangeRecommended: true,
+      });
+    const [saved] = JSON.parse(await readFile(file, 'utf8'));
+    expect(saved).toMatchObject({
+      role: original.role,
+      totp: original.totp,
+      authVersion: 7,
+      passwordChangeRecommended: true,
+    });
+    expect(saved.passwordHash).toMatch(/^scrypt\$/);
+    expect(saved.salt).not.toBe(original.salt);
+    users.destroy();
+    await users.initialize();
+    expect(
+      (await users.validateCredentials('alice', 'example-password'))
+        ?.passwordHash
+    ).toBe(saved.passwordHash);
+    await expect(
+      users.updateUser('alice', { password: 'example-password' })
+    ).rejects.toThrow(/different/i);
+    await users.updateUser('alice', { role: 'admin' });
+    expect((await users.getUser('alice'))?.passwordChangeRecommended).toBe(
+      true
+    );
+    await users.updateUser('alice', { password: 'new-example-password' });
+    expect(
+      (await users.validateCredentials('alice', 'new-example-password'))
+        ?.passwordChangeRecommended
+    ).toBeUndefined();
+    expect(
+      await users.validateCredentials('alice', 'example-password')
+    ).toBeUndefined();
+    expect((await users.getUser('alice'))?.authVersion).toBe(9);
+  } finally {
+    users.destroy();
+  }
+});
+
+it('updates only the matching legacy npm token and keeps its value, identity and revocation working', async () => {
+  const dir = await createTestDirectory('credentials', 'legacy tokens');
+  const file = join(dir, 'users.json');
+  const original = {
+    key: 'old-key',
+    label: 'build',
+    createdAt: '2020-01-01',
+    salt: 'legacy-salt',
+    tokenHash: 'aTy4FwQS0BXd7NhDZA4YVA/r4mE=',
+  };
+  const unused = {
+    ...original,
+    key: 'unused',
+    salt: 'different-salt',
+    label: 'release',
+  };
+  const user = {
+    id: 'old-user',
+    username: 'alice',
+    role: 'admin',
+    salt: 'legacy-salt',
+    passwordHash: 'SOvUmqH2BOLjR7bnt38nsurOooc=',
+    authVersion: 8,
+    npmTokens: [unused, original],
+  };
+  await writeFile(file, JSON.stringify([user]));
+  const users = createUserService({
+    configDir: dir,
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  });
+  try {
+    await users.initialize();
+    expect(await users.validateNpmToken('invalid-token')).toBeUndefined();
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual([user]);
+    expect((await users.validateNpmToken('npmjs_fixture'))?.id).toBe(user.id);
+    const [saved] = JSON.parse(await readFile(file, 'utf8'));
+    expect(saved.npmTokens[0]).toEqual(unused);
+    expect(saved.npmTokens[1]).toMatchObject({
+      key: original.key,
+      label: original.label,
+      createdAt: original.createdAt,
+      lastUsedAt: expect.any(String),
+      tokenHash: expect.stringMatching(/^sha256\$/),
+    });
+    expect(saved.npmTokens[1]).not.toHaveProperty('salt');
+    expect(saved.passwordHash).toBe(user.passwordHash);
+    expect(saved.authVersion).toBe(8);
+    users.destroy();
+    await users.initialize();
+    expect((await users.validateNpmToken('npmjs_fixture'))?.id).toBe(user.id);
+    await users.deleteNpmToken('alice', 'old-key');
+    expect(await users.validateNpmToken('npmjs_fixture')).toBeUndefined();
+  } finally {
+    users.destroy();
+  }
+});
+
+it('rolls back failed conversions and never overwrites a password changed since verification began', async () => {
+  const dir = await createTestDirectory('credentials', 'migration persistence');
+  const file = join(dir, 'users.json');
+  const original = {
+    id: 'fixture',
+    username: 'alice',
+    role: 'admin',
+    salt: 'legacy-salt',
+    passwordHash: 'SOvUmqH2BOLjR7bnt38nsurOooc=',
+    npmTokens: [
+      {
+        key: 'k',
+        label: 'CI',
+        createdAt: '',
+        salt: 'legacy-salt',
+        tokenHash: 'aTy4FwQS0BXd7NhDZA4YVA/r4mE=',
+      },
+    ],
+  };
+  await writeFile(file, JSON.stringify([original]));
+  const users = createUserService({
+    configDir: dir,
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    serverConfig: { port: 0, passwordStrengthCheck: false },
+  });
+  try {
+    await users.initialize();
+    await rename(file, file + '.backup');
+    await mkdir(file);
+    await expect(
+      users.validateCredentials('alice', 'example-password')
+    ).rejects.toThrow();
+    await expect(users.validateNpmToken('npmjs_fixture')).rejects.toThrow();
+    expect(await users.getUser('alice')).toMatchObject(original);
+    await rmdir(file);
+    await rename(file + '.backup', file);
+    const before = await users.getUser('alice');
+    await users.updateUser('alice', { password: 'replacement-password' });
+    // Model verification which already read the old snapshot when another request reset the password.
+    vi.spyOn(users, 'getUser').mockResolvedValueOnce(before);
+    expect(
+      await users.validateCredentials('alice', 'example-password')
+    ).toBeUndefined();
+    expect(
+      (await users.validateCredentials('alice', 'replacement-password'))?.id
+    ).toBe(original.id);
+    expect(
+      (await users.getUser('alice'))?.passwordChangeRecommended
+    ).toBeUndefined();
+  } finally {
+    users.destroy();
+    vi.restoreAllMocks();
   }
 });
