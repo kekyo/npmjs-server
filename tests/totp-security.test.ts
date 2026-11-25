@@ -206,8 +206,8 @@ describe('TOTP security boundaries', () => {
         true
       )
     ).rejects.toThrow();
-    await expect(stat(keyFile)).rejects.toThrow();
-    await writeFile(keyFile, Buffer.alloc(32, 42));
+    // Exclusive creation also proves the failed recovery left the key absent.
+    await writeFile(keyFile, Buffer.alloc(32, 42), { flag: 'wx', mode: 0o600 });
     await expect(totp.initialize()).rejects.toThrow();
   });
 

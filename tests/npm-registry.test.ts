@@ -589,9 +589,8 @@ describe('npm registry routes', () => {
       }
     );
     expect(publishResponse.status).toBe(201);
-    await expect(fs.access(distTagsPath)).rejects.toHaveProperty(
-      'code',
-      'ENOENT'
+    expect(await fs.readdir(path.dirname(distTagsPath))).not.toContain(
+      'dist-tags.json'
     );
 
     const duplicateResponse = await fetch(
@@ -661,9 +660,8 @@ describe('npm registry routes', () => {
       }
     );
     expect(deleteTagResponse.status).toBe(200);
-    await expect(fs.access(distTagsPath)).rejects.toHaveProperty(
-      'code',
-      'ENOENT'
+    expect(await fs.readdir(path.dirname(distTagsPath))).not.toContain(
+      'dist-tags.json'
     );
 
     const tagsAfterDeleteResponse = await fetch(
