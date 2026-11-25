@@ -142,7 +142,7 @@ npm publish ./example-package-1.0.0.tgz --registry http://localhost:4873/
 同じパッケージ名・バージョンが存在する場合、既定では既存のパッケージを維持します。
 `duplicatePackagePolicy`で、上書きする`overwrite`、既存の内容を維持する`ignore`、エラーにする`error`を選べます。
 
-アップロード要求の上限は既定で100MBです。
+アップロード要求の上限は既定で100MBです。`--import-packages` で取得するメタデータとアーカイブにも、応答ごとに同じ上限が適用されます。
 `maxUploadSizeMb`で変更できます。`npm publish`はアーカイブをBase64でJSONに格納するため、アーカイブのサイズより大きな上限が必要です。
 
 ---

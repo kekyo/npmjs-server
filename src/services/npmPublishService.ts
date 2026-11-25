@@ -116,7 +116,7 @@ export const publishNpmTarball = async (input: {
 
   const addResult = await metadataService.addPackageEntry(
     entry,
-    async (filePath) => await fs.writeFile(filePath, tarball),
+    async (filePath) => await fs.writeFile(filePath, tarball, { flag: 'wx' }),
     policy,
     distTags
   );

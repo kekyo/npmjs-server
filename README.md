@@ -145,7 +145,7 @@ In the administration UI, open "Upload Package" to select files or drag and drop
 If the same package name and version already exist, the server keeps the existing package by default.
 Set `duplicatePackagePolicy` to `overwrite` to replace it, `ignore` to keep it, or `error` to reject the upload.
 
-The default upload request limit is 100 MB. Change it with `maxUploadSizeMb`.
+The default upload request limit is 100 MB. Change it with `maxUploadSizeMb`. During `--import-packages`, the same limit applies to each metadata response and archive download.
 Because `npm publish` embeds the archive as Base64 in JSON, the limit must accommodate a request larger than the archive itself.
 
 ## Package Storage Configuration

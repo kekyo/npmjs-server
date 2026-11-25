@@ -2,10 +2,9 @@
 // Copyright (c) Kouji Matsui (@kekyo@mi.kekyo.net)
 // License under MIT.
 
-import { constants } from 'node:fs';
-import { lstat, open, realpath } from 'node:fs/promises';
+import { openStorageFile } from './storagePaths.ts';
 import type { FastifyReply } from 'fastify';
-import { extname, resolve, sep } from 'node:path';
+import { extname } from 'node:path';
 import type { Logger } from '../types.ts';
 import type { ReaderWriterLock } from 'async-primitives';
 
@@ -55,30 +54,8 @@ export const streamFile = async (
   // Acquire reader lock with signal support
   const handler = await locker.readLock(signal);
   try {
-    if (filePath.includes('\0')) return false;
-    const directory = await realpath(root);
-    const candidate = resolve(directory, filePath);
-    if (
-      !candidate.startsWith(
-        directory.endsWith(sep) ? directory : directory + sep
-      )
-    )
-      return false;
-    const file = await open(
-      candidate,
-      constants.O_RDONLY |
-        (constants.O_NOFOLLOW ?? 0) |
-        (constants.O_NONBLOCK ?? 0)
-    );
+    const { file, stats } = await openStorageFile(root, filePath);
     try {
-      const stats = await file.stat();
-      if (!stats.isFile()) return false;
-      // Verify the opened file's identity before sending any bytes, including
-      // when a directory entry was replaced while the file was being opened.
-      if ((await realpath(candidate)) !== candidate) return false;
-      const entry = await lstat(candidate);
-      if (entry.dev !== stats.dev || entry.ino !== stats.ino) return false;
-
       // Determine Content-Type and stream from the descriptor used for Content-Length.
       reply.header(
         'Content-Type',

@@ -199,6 +199,35 @@ describe('npm registry routes', () => {
     ).toBe(404);
   });
 
+  test('refuses a linked package directory on publish without changing its target', async ({
+    task,
+  }) => {
+    const dir = await createTestDirectory('npm-registry', task.name);
+    const packages = path.join(dir, 'packages');
+    const sibling = path.join(dir, 'sibling');
+    await fs.mkdir(packages);
+    await fs.mkdir(sibling);
+    await fs.symlink(sibling, path.join(packages, 'sample'), 'dir');
+    const app = await createFastifyInstance(
+      { port: 0, configDir: dir, packageDir: packages },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+    const payload = await createPackageTarball({
+      name: 'sample',
+      version: '1.0.0',
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/publish',
+      headers: { 'content-type': 'application/octet-stream' },
+      payload,
+    });
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(await fs.readdir(sibling)).toEqual([]);
+  });
+
   test('should reject invalid versions before either publish API writes package files', async (context) => {
     const configDir = await createTestDirectory(
       'npm-registry',

@@ -5,6 +5,10 @@
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
+import {
+  preparePackageDirectory,
+  readStorageFile,
+} from '../utils/storagePaths.ts';
 import semver from 'semver';
 import { createReaderWriterLock } from 'async-primitives';
 import type { Logger, DuplicatePackagePolicy } from '../types.ts';
@@ -16,6 +20,7 @@ import {
 import {
   createTarballFileName,
   encodePackageNameForPath,
+  isValidPackageName,
   isValidPackageVersion,
   type NpmPackageManifest,
   packageNameToPathSegments,
@@ -132,9 +137,6 @@ export const createMetadataService = (
   const buildTarballUrl = (packageName: string, tarballName: string): string =>
     `${currentBaseUrl}/${encodePackageNameForPath(packageName)}/-/${encodeURIComponent(tarballName)}`;
 
-  const getPackageRootPath = (packageName: string): string =>
-    path.join(packagesRoot, ...packageNameToPathSegments(packageName));
-
   const filterExistingDistTags = (
     entries: PackageEntry[],
     distTags: PackageDistTags
@@ -180,9 +182,10 @@ export const createMetadataService = (
     packagePath: string,
     entries: PackageEntry[]
   ): Promise<PackageDistTags> => {
-    const distTagsPath = path.join(packagePath, 'dist-tags.json');
     try {
-      const content = await fs.readFile(distTagsPath, 'utf-8');
+      const content = (
+        await readStorageFile(packagePath, 'dist-tags.json')
+      ).toString('utf8');
       const parsed = JSON.parse(content);
       if (parsed.format === 'npmjs-server/dist-tags-v1') {
         explicitDistTags.add(normalizeKey(entries[0]!.metadata.name));
@@ -199,7 +202,10 @@ export const createMetadataService = (
     entries: PackageEntry[],
     distTags: PackageDistTags
   ): Promise<void> => {
-    const packagePath = getPackageRootPath(packageName);
+    const packagePath = await preparePackageDirectory(
+      packagesRoot,
+      packageName
+    );
     const distTagsPath = path.join(packagePath, 'dist-tags.json');
     if (explicitDistTags.has(normalizeKey(packageName))) {
       await writePrivateFile(
@@ -221,7 +227,6 @@ export const createMetadataService = (
       return;
     }
 
-    await fs.mkdir(packagePath, { recursive: true });
     await writeAtomicFile(
       distTagsPath,
       JSON.stringify(persistableTags, null, 2)
@@ -237,7 +242,12 @@ export const createMetadataService = (
       const manifestPath = path.join(versionPath, 'package.json');
       const metadataPath = path.join(versionPath, 'metadata.json');
       const metadataFile = JSON.parse(
-        await fs.readFile(metadataPath, 'utf-8')
+        (
+          await readStorageFile(
+            packagesRoot,
+            path.relative(packagesRoot, metadataPath)
+          )
+        ).toString('utf8')
       ) as {
         readme?: string;
         packageReadme?: string;
@@ -251,7 +261,12 @@ export const createMetadataService = (
       const manifest =
         metadataFile.manifest ??
         (JSON.parse(
-          await fs.readFile(manifestPath, 'utf-8')
+          (
+            await readStorageFile(
+              packagesRoot,
+              path.relative(packagesRoot, manifestPath)
+            )
+          ).toString('utf8')
         ) as NpmPackageManifest);
 
       if (!isValidPackageVersion(version) || manifest.version !== version) {
@@ -263,6 +278,14 @@ export const createMetadataService = (
         metadataFile.tarballName ??
         createTarballFileName(manifest.name || packageName, version);
       const actualName = manifest.name || packageName;
+      if (
+        !isValidPackageName(actualName) ||
+        actualName !== packageName ||
+        tarballName !== path.basename(tarballName) ||
+        !tarballName.endsWith('.tgz')
+      ) {
+        throw new Error('Invalid stored package identity or tarball filename');
+      }
 
       return {
         metadata: {
@@ -309,7 +332,7 @@ export const createMetadataService = (
         versionDirs.map(async (version) => {
           if (version.startsWith('.')) return undefined;
           const versionPath = path.join(packagePath, version);
-          const stat = await fs.stat(versionPath);
+          const stat = await fs.lstat(versionPath);
           if (!stat.isDirectory()) {
             return undefined;
           }
@@ -337,7 +360,7 @@ export const createMetadataService = (
       await Promise.all(
         packageDirs.map(async (packageDir) => {
           const packagePath = path.join(packagesRoot, packageDir);
-          const stat = await fs.stat(packagePath);
+          const stat = await fs.lstat(packagePath);
           if (!stat.isDirectory()) {
             return;
           }
@@ -347,7 +370,7 @@ export const createMetadataService = (
             await Promise.all(
               scopedDirs.map(async (name) => {
                 const scopedPackagePath = path.join(packagePath, name);
-                const scopedStat = await fs.stat(scopedPackagePath);
+                const scopedStat = await fs.lstat(scopedPackagePath);
                 if (scopedStat.isDirectory()) {
                   await scanPackageVersions(
                     `${packageDir}/${name}`,
@@ -404,9 +427,11 @@ export const createMetadataService = (
     entries: PackageEntry[],
     tags: PackageDistTags
   ): Promise<boolean> => {
-    const packagePath = getPackageRootPath(entry.metadata.name);
+    const packagePath = await preparePackageDirectory(
+      packagesRoot,
+      entry.metadata.name
+    );
     const versionPath = path.join(packagePath, entry.metadata.version);
-    await fs.mkdir(packagePath, { recursive: true });
     const staging = await fs.mkdtemp(path.join(packagePath, '.publish-'));
     const prepared = path.join(staging, 'version');
     const rollback: Array<{ from: string; to: string }> = [];
