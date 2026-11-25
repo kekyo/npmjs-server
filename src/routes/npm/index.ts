@@ -30,6 +30,7 @@ import {
   isValidPackageName,
   packageNameToPathSegments,
 } from '../../utils/npmPackage.ts';
+import { loginRateLimit } from '../../services/requestLimits.ts';
 import { streamFile } from '../../utils/fileStreaming.ts';
 import {
   isNpmProxyError,
@@ -464,19 +465,35 @@ export const registerNpmRoutes = async (
     }
   );
 
-  fastify.post('/-/v1/login', async (request, reply) => {
-    const id = randomUUID();
-    loginFlows.set(id, {
-      id,
-      createdAt: Date.now(),
-    });
+  fastify.post(
+    '/-/v1/login',
+    { config: { rateLimit: loginRateLimit } },
+    async (request, reply) => {
+      // Keep pending, unclaimed login flows bounded even when clients never poll.
+      const now = Date.now();
+      for (const [key, flow] of loginFlows) {
+        if (now - flow.createdAt <= 10 * 60_000) break;
+        loginFlows.delete(key);
+      }
+      if (loginFlows.size >= 5000) {
+        return reply
+          .code(429)
+          .header('Retry-After', '60')
+          .send({ error: 'Too many pending logins' });
+      }
+      const id = randomUUID();
+      loginFlows.set(id, {
+        id,
+        createdAt: Date.now(),
+      });
 
-    const baseUrl = getBaseUrl(request);
-    return reply.status(201).send({
-      loginUrl: `${baseUrl}/npm-login/${id}`,
-      doneUrl: `${baseUrl}/-/v1/login/${id}/done`,
-    });
-  });
+      const baseUrl = getBaseUrl(request);
+      return reply.status(201).send({
+        loginUrl: `${baseUrl}/npm-login/${id}`,
+        doneUrl: `${baseUrl}/-/v1/login/${id}/done`,
+      });
+    }
+  );
 
   fastify.get('/-/v1/login/:id/done', async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -528,170 +545,186 @@ export const registerNpmRoutes = async (
 </html>`);
   });
 
-  fastify.post('/npm-login/:id', async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const flow = loginFlows.get(id);
-    reply.header('Cache-Control', 'no-store');
-    if (!flow || Date.now() - flow.createdAt > 10 * 60 * 1000) {
-      totpService.cancel('', flow?.totpChallenge ?? '');
-      loginFlows.delete(id);
-      return reply.status(404).type('text/html').send('Login flow not found');
-    }
+  fastify.post(
+    '/npm-login/:id',
+    { config: { rateLimit: loginRateLimit } },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const flow = loginFlows.get(id);
+      reply.header('Cache-Control', 'no-store');
+      if (!flow || Date.now() - flow.createdAt > 10 * 60 * 1000) {
+        totpService.cancel('', flow?.totpChallenge ?? '');
+        loginFlows.delete(id);
+        return reply.status(404).type('text/html').send('Login flow not found');
+      }
 
-    const body =
-      typeof request.body === 'object' && request.body
-        ? (request.body as Record<string, any>)
-        : {};
-    let username: string;
-    try {
-      if (flow.totpChallenge) {
-        const result = await totpService.verifyLogin(
-          flow.totpChallenge,
-          String(body.code ?? ''),
-          request.ip,
-          body.recovery === true || body.recovery === 'on'
-        );
-        flow.totpChallenge = undefined;
-        username = result.user.username;
-      } else {
-        username = String(body.username ?? '');
-        const password = String(body.password ?? '');
-        const user = await userService.validateCredentials(username, password);
-        if (!user) {
-          return reply
-            .status(401)
-            .type('text/html')
-            .send('Invalid credentials');
+      const body =
+        typeof request.body === 'object' && request.body
+          ? (request.body as Record<string, any>)
+          : {};
+      let username: string;
+      try {
+        if (flow.totpChallenge) {
+          const result = await totpService.verifyLogin(
+            flow.totpChallenge,
+            String(body.code ?? ''),
+            request.ip,
+            body.recovery === true || body.recovery === 'on'
+          );
+          flow.totpChallenge = undefined;
+          username = result.user.username;
+        } else {
+          username = String(body.username ?? '');
+          const password = String(body.password ?? '');
+          const user = await userService.validateCredentials(
+            username,
+            password
+          );
+          if (!user) {
+            return reply
+              .status(401)
+              .type('text/html')
+              .send('Invalid credentials');
+          }
+          if (user.totp && authService.getAuthMode() !== 'none') {
+            flow.totpChallenge = totpService.beginLogin(
+              user,
+              false,
+              request.ip
+            );
+            return reply
+              .type('text/html')
+              .send(
+                secondFactorForm('Enter the code from your authenticator app.')
+              );
+          }
         }
-        if (user.totp && authService.getAuthMode() !== 'none') {
-          flow.totpChallenge = totpService.beginLogin(user, false, request.ip);
+      } catch (error) {
+        const failure = error as { statusCode?: number; code?: string };
+        if (failure.statusCode === 429) {
           return reply
+            .status(429)
+            .header('Retry-After', '600')
+            .type('text/html')
+            .send('Too many attempts. Try again in ten minutes.');
+        }
+        if (failure.code === 'TOTP_EXPIRED') {
+          flow.totpChallenge = undefined;
+          return reply
+            .status(400)
+            .type('text/html')
+            .send('Verification expired. Reload this page to sign in again.');
+        }
+        if (failure.statusCode === 400) {
+          return reply
+            .status(400)
             .type('text/html')
             .send(
-              secondFactorForm('Enter the code from your authenticator app.')
+              secondFactorForm(
+                'The code is incorrect or has already been used. Try a new code.'
+              )
             );
         }
-      }
-    } catch (error) {
-      const failure = error as { statusCode?: number; code?: string };
-      if (failure.statusCode === 429) {
+        logger.error(`npm login verification failed: ${error}`);
         return reply
-          .status(429)
-          .header('Retry-After', '600')
+          .status(500)
           .type('text/html')
-          .send('Too many attempts. Try again in ten minutes.');
+          .send('Unable to complete verification.');
       }
-      if (failure.code === 'TOTP_EXPIRED') {
-        flow.totpChallenge = undefined;
-        return reply
-          .status(400)
-          .type('text/html')
-          .send('Verification expired. Reload this page to sign in again.');
-      }
-      if (failure.statusCode === 400) {
-        return reply
-          .status(400)
-          .type('text/html')
-          .send(
-            secondFactorForm(
-              'The code is incorrect or has already been used. Try a new code.'
-            )
-          );
-      }
-      logger.error(`npm login verification failed: ${error}`);
-      return reply
-        .status(500)
-        .type('text/html')
-        .send('Unable to complete verification.');
-    }
 
-    const tokenResult = await userService.addNpmToken(
-      username,
-      `npm web login ${new Date().toISOString()}`
-    );
-    if (!tokenResult) {
-      return reply.status(404).type('text/html').send('User not found');
-    }
+      const tokenResult = await userService.addNpmToken(
+        username,
+        `npm web login ${new Date().toISOString()}`
+      );
+      if (!tokenResult) {
+        return reply.status(404).type('text/html').send('User not found');
+      }
 
-    flow.token = tokenResult.token;
-    flow.username = username;
-    return reply.type('text/html').send(`<!doctype html>
+      flow.token = tokenResult.token;
+      flow.username = username;
+      return reply.type('text/html').send(`<!doctype html>
 <html>
   <head><meta charset="utf-8"><title>npm login complete</title></head>
   <body><main><h1>Login complete</h1><p>You can close this window.</p></main></body>
 </html>`);
-  });
-
-  fastify.put('/-/user/*', async (request, reply) => {
-    reply.header('Cache-Control', 'no-store');
-    const routePath = (request.params as { '*': string })['*'];
-    const routeUsername = routePath.replace(/^org\.couchdb\.user:/, '');
-    const body = getBodyObject(request.body);
-    const username = String(body.name ?? decodePackageName(routeUsername));
-    const password = String(body.password ?? '');
-    const user = await userService.validateCredentials(username, password);
-    if (!user) {
-      return reply.status(401).send({
-        error: 'Invalid credentials',
-        reason: 'Username or password is incorrect',
-      });
     }
+  );
 
-    if (user.totp && authService.getAuthMode() !== 'none') {
-      const otp = request.headers['npm-otp'];
-      if (typeof otp !== 'string' || !otp) {
-        return reply.status(401).header('WWW-Authenticate', 'OTP').send({
-          error: 'EOTP',
-          reason: 'A one-time password is required',
+  fastify.put(
+    '/-/user/*',
+    { config: { rateLimit: loginRateLimit } },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const routePath = (request.params as { '*': string })['*'];
+      const routeUsername = routePath.replace(/^org\.couchdb\.user:/, '');
+      const body = getBodyObject(request.body);
+      const username = String(body.name ?? decodePackageName(routeUsername));
+      const password = String(body.password ?? '');
+      const user = await userService.validateCredentials(username, password);
+      if (!user) {
+        return reply.status(401).send({
+          error: 'Invalid credentials',
+          reason: 'Username or password is incorrect',
         });
       }
-      let challenge: string | undefined;
-      try {
-        challenge = totpService.beginLogin(user, false, request.ip);
-        // npm sends both authenticator and recovery codes through npm-otp.
-        await totpService.verifyLogin(
-          challenge,
-          otp,
-          request.ip,
-          !/^\d{6}$/.test(otp)
-        );
-      } catch (error) {
-        const failure = error as { statusCode?: number };
-        if (failure.statusCode === 429) {
-          return reply.status(429).header('Retry-After', '600').send({
-            error: 'TOTP_RATE_LIMITED',
-            reason: 'Too many verification attempts',
-          });
-        }
-        if (failure.statusCode === 400) {
+
+      if (user.totp && authService.getAuthMode() !== 'none') {
+        const otp = request.headers['npm-otp'];
+        if (typeof otp !== 'string' || !otp) {
           return reply.status(401).header('WWW-Authenticate', 'OTP').send({
             error: 'EOTP',
-            reason: 'The one-time password is invalid or has already been used',
+            reason: 'A one-time password is required',
           });
         }
-        logger.error(`npm login verification failed: ${error}`);
-        return reply.status(500).send({ error: 'TOTP_STORAGE_ERROR' });
-      } finally {
-        totpService.cancel('', challenge ?? '');
+        let challenge: string | undefined;
+        try {
+          challenge = totpService.beginLogin(user, false, request.ip);
+          // npm sends both authenticator and recovery codes through npm-otp.
+          await totpService.verifyLogin(
+            challenge,
+            otp,
+            request.ip,
+            !/^\d{6}$/.test(otp)
+          );
+        } catch (error) {
+          const failure = error as { statusCode?: number };
+          if (failure.statusCode === 429) {
+            return reply.status(429).header('Retry-After', '600').send({
+              error: 'TOTP_RATE_LIMITED',
+              reason: 'Too many verification attempts',
+            });
+          }
+          if (failure.statusCode === 400) {
+            return reply.status(401).header('WWW-Authenticate', 'OTP').send({
+              error: 'EOTP',
+              reason:
+                'The one-time password is invalid or has already been used',
+            });
+          }
+          logger.error(`npm login verification failed: ${error}`);
+          return reply.status(500).send({ error: 'TOTP_STORAGE_ERROR' });
+        } finally {
+          totpService.cancel('', challenge ?? '');
+        }
       }
-    }
 
-    const tokenResult = await userService.addNpmToken(
-      username,
-      `npm legacy login ${new Date().toISOString()}`
-    );
-    if (!tokenResult) {
-      return reply.status(404).send({ error: 'User not found' });
-    }
+      const tokenResult = await userService.addNpmToken(
+        username,
+        `npm legacy login ${new Date().toISOString()}`
+      );
+      if (!tokenResult) {
+        return reply.status(404).send({ error: 'User not found' });
+      }
 
-    return reply.send({
-      ok: true,
-      id: `org.couchdb.user:${username}`,
-      rev: tokenResult.key,
-      token: tokenResult.token,
-      username,
-    });
-  });
+      return reply.send({
+        ok: true,
+        id: `org.couchdb.user:${username}`,
+        rev: tokenResult.key,
+        token: tokenResult.token,
+        username,
+      });
+    }
+  );
 
   fastify.get(
     '/-/v1/search',

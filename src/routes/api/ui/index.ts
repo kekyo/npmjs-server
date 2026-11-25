@@ -15,6 +15,7 @@ import {
   name as packageName,
   version,
 } from '../../../generated/packageMetadata.ts';
+import { publicReadRateLimit } from '../../../services/requestLimits.ts';
 import { streamFile } from '../../../utils/fileStreaming.ts';
 
 /**
@@ -227,6 +228,7 @@ export const registerUiRoutes = async (
   // POST /api/ui/config - Application configuration (public endpoint)
   fastify.post(
     '/config',
+    { config: { rateLimit: publicReadRateLimit } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         let currentUser = null;
@@ -649,6 +651,7 @@ export const registerUiRoutes = async (
   fastify.get(
     '/icon/:id/:version',
     {
+      config: { rateLimit: publicReadRateLimit },
       preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
         const authMode = authService.getAuthMode();
         if (authMode === 'full') {
