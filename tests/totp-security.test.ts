@@ -187,15 +187,19 @@ describe('TOTP security boundaries', () => {
     expect((await users.getUser('alice'))!.totp).toBeDefined();
   });
 
-  it('fails closed when the key is missing or replaced and keeps private permissions', async () => {
+  it('creates the encryption key and enrolled account store with private permissions', async () => {
     const keyFile = join(directory, 'totp.key');
     expect((await stat(keyFile)).mode & 0o777).toBe(0o600);
     expect((await stat(join(directory, 'users.json'))).mode & 0o777).toBe(
       0o600
     );
+  });
+
+  it('refuses to use enrolled accounts with a missing or replaced key', async () => {
+    const keyFile = join(directory, 'totp.key');
     totp.destroy();
     await rm(keyFile);
-    await expect(totp.initialize()).rejects.toThrow();
+    await expect(totp.initialize()).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(
       totp.setup(
         (await users.getUser('alice'))!,
