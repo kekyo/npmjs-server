@@ -19,6 +19,7 @@ import {
   loginBodyLimit,
   publicReadRateLimit,
 } from '../../../services/requestLimits.ts';
+import { isLegacyCredentialHash } from '../../../utils/legacyCredentials.ts';
 import { streamFile } from '../../../utils/fileStreaming.ts';
 
 /**
@@ -69,6 +70,8 @@ export interface ConfigResponse {
     username: string;
     role: string;
     authenticated: boolean;
+    /** Whether the account previously used the legacy password format. */
+    passwordChangeRecommended?: true;
   } | null;
 }
 
@@ -86,6 +89,13 @@ export interface UserManagementRequest {
  * User list response
  */
 export interface UserListResponse {
+  /** Number of credentials that still require the legacy verifier. */
+  credentialMigration: {
+    /** Accounts whose password has not been verified or reset since upgrading. */
+    passwords: number;
+    /** Issued npm tokens that have not been used or revoked since upgrading. */
+    npmTokens: number;
+  };
   users: Array<{
     id: string;
     username: string;
@@ -246,6 +256,7 @@ export const registerUiRoutes = async (
                 username: session.username,
                 role: session.role,
                 authenticated: true,
+                passwordChangeRecommended: session.passwordChangeRecommended,
               };
             }
           }
@@ -298,6 +309,19 @@ export const registerUiRoutes = async (
             const users = await userService.getAllUsers();
 
             const response: UserListResponse = {
+              credentialMigration: {
+                passwords: users.filter((user) =>
+                  isLegacyCredentialHash(user.passwordHash)
+                ).length,
+                npmTokens: users.reduce(
+                  (count, user) =>
+                    count +
+                    (user.npmTokens ?? []).filter((token) =>
+                      isLegacyCredentialHash(token.tokenHash)
+                    ).length,
+                  0
+                ),
+              },
               users: users.map((user) => ({
                 id: user.id,
                 username: user.username,

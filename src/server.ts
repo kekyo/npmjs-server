@@ -483,6 +483,7 @@ export const createFastifyInstance = async (
       username: user.username,
       role: user.role,
       authVersion: user.authVersion ?? 0,
+      passwordChangeRecommended: user.passwordChangeRecommended,
       expirationHours,
     });
     // Set session cookie; @fastify/cookie expresses maxAge in seconds.
@@ -637,6 +638,7 @@ export const createFastifyInstance = async (
       user: {
         username: session.username,
         role: session.role,
+        passwordChangeRecommended: session.passwordChangeRecommended,
       },
     };
   });
@@ -659,6 +661,7 @@ export const createFastifyInstance = async (
               username: session.username,
               role: session.role,
               authenticated: true,
+              passwordChangeRecommended: session.passwordChangeRecommended,
             };
           }
         }

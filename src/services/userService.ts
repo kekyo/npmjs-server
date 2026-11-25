@@ -36,6 +36,8 @@ export interface NpmToken {
   tokenHash: string;
   /** Salt on legacy records, removed when the token is first used. */
   salt?: string;
+  /** Retains the rotation reminder for a token first issued in the legacy format. */
+  rotationRecommended?: true;
   createdAt: string;
   lastUsedAt?: string;
 }
@@ -90,6 +92,8 @@ export interface NpmTokenListResponse {
     label: string;
     createdAt: string;
     lastUsedAt?: string;
+    /** Legacy-issued token still awaiting first use or already upgraded in place. */
+    migrationStatus?: 'pending' | 'upgraded';
   }>;
 }
 
@@ -627,7 +631,7 @@ export const createUserService = (config: UserServiceConfig): UserService => {
     listNpmTokens: async (
       username: string
     ): Promise<NpmTokenListResponse | undefined> => {
-      const user = users.get(username);
+      const user = await service.getUser(username);
       if (!user) {
         return undefined;
       }
@@ -643,6 +647,11 @@ export const createUserService = (config: UserServiceConfig): UserService => {
           label: token.label,
           createdAt: token.createdAt,
           lastUsedAt: token.lastUsedAt,
+          migrationStatus: isLegacyCredentialHash(token.tokenHash)
+            ? 'pending'
+            : token.rotationRecommended
+              ? 'upgraded'
+              : undefined,
         })),
       };
     },
@@ -781,6 +790,7 @@ export const createUserService = (config: UserServiceConfig): UserService => {
               if (legacy) {
                 npmToken.tokenHash = encodeNpmTokenDigest(digest);
                 delete npmToken.salt;
+                npmToken.rotationRecommended = true;
               }
               npmToken.lastUsedAt = new Date().toISOString();
               user.updatedAt = npmToken.lastUsedAt;

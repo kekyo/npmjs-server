@@ -467,6 +467,34 @@ export const messages = {
     fallback: "Delete User" 
   } as SimpleMessageItem,
   /**
+   * PASSWORD_MIGRATION_NOTICE ==> "Your password was previously stored in the old format. You can keep using the registry, but we recommend choosing a new password."
+   */
+  PASSWORD_MIGRATION_NOTICE: { 
+    key: "PASSWORD_MIGRATION_NOTICE", 
+    fallback: "Your password was previously stored in the old format. You can keep using the registry, but we recommend choosing a new password." 
+  } as SimpleMessageItem,
+  /**
+   * TOKEN_MIGRATION_PENDING ==> "This token is still stored in the old format. Its next use will update it automatically. Revoke it if you no longer use it."
+   */
+  TOKEN_MIGRATION_PENDING: { 
+    key: "TOKEN_MIGRATION_PENDING", 
+    fallback: "This token is still stored in the old format. Its next use will update it automatically. Revoke it if you no longer use it." 
+  } as SimpleMessageItem,
+  /**
+   * TOKEN_MIGRATION_UPGRADED ==> "This token’s storage format has been updated. Its value still works. If you rotate it, verify the replacement before revoking this token."
+   */
+  TOKEN_MIGRATION_UPGRADED: { 
+    key: "TOKEN_MIGRATION_UPGRADED", 
+    fallback: "This token’s storage format has been updated. Its value still works. If you rotate it, verify the replacement before revoking this token." 
+  } as SimpleMessageItem,
+  /**
+   * CREDENTIAL_MIGRATION_COUNTS ==> "Passwords awaiting migration ({passwords:number}) · npm tokens awaiting migration ({npmTokens:number}). A future release will end support for the old format."
+   */
+  CREDENTIAL_MIGRATION_COUNTS: { 
+    key: "CREDENTIAL_MIGRATION_COUNTS", 
+    fallback: "Passwords awaiting migration ({passwords:number}) · npm tokens awaiting migration ({npmTokens:number}). A future release will end support for the old format." 
+  } as MessageItem<{ passwords: number; npmTokens: number }>,
+  /**
    * CHANGE_PASSWORD ==> "Change Password"
    */
   CHANGE_PASSWORD: { 
