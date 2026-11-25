@@ -13,6 +13,8 @@ import {
 import { createConsoleLogger } from '../src/logger';
 import { ServerConfig } from '../src/types';
 import { createUserService } from '../src/services/userService';
+import { createMetadataService } from '../src/services/metadataService.ts';
+import { createPackageEntryFromTarball } from '../src/services/npmPublishService.ts';
 import { calculateDist } from '../src/utils/npmPackage.ts';
 import {
   createTestDirectory,
@@ -145,6 +147,32 @@ describe('npm registry routes', () => {
       await server.close();
       server = undefined;
     }
+  });
+
+  test('rejects an archive whose storage name disagrees with its validated package identity', async ({
+    task,
+  }) => {
+    const dir = await createTestDirectory('npm-registry', task.name);
+    const storage = createMetadataService(
+      dir,
+      'http://localhost',
+      silentLogger
+    );
+    await storage.initialize();
+    const bytes = await createPackageTarball({
+      name: 'demo',
+      version: '1.0.0',
+    });
+    const entry = await createPackageEntryFromTarball(
+      bytes,
+      'http://localhost'
+    );
+    entry.storage.tarballName = 'another-archive.tgz';
+    await expect(storage.addPackageEntry(entry, bytes)).rejects.toThrow(
+      /storage identity/
+    );
+    expect(storage.getPackageMetadata('demo')).toEqual([]);
+    expect(await fs.readdir(dir)).toEqual([]);
   });
 
   test('serves icons only for registered packages and keeps linked files within the registry', async (context) => {

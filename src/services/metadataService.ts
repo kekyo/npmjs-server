@@ -66,6 +66,9 @@ export interface PackageEntry {
  */
 export type PackageDistTags = Record<string, string>;
 
+/** Validated archive bytes, or a private download ready for an atomic move. */
+type PackageArchive = Buffer | { readonly downloadedFile: string };
+
 /**
  * Service interface for managing npm package metadata and cache.
  */
@@ -97,14 +100,14 @@ export interface MetadataService {
   /**
    * Publishes an archive and its metadata under the same duplicate policy.
    * @param entry - Validated package metadata and storage identity
-   * @param writeTarball - Writes the archive to the supplied private staging path
+   * @param archive - Validated archive contents or a private proxy download
    * @param policy - How to handle an existing release
    * @param distTags - Tags to publish with the release
    * @returns The action taken for this release
    */
   readonly addPackageEntry: (
     entry: PackageEntry,
-    writeTarball: (filePath: string) => Promise<void>,
+    archive: PackageArchive,
     policy?: DuplicatePackagePolicy,
     distTags?: PackageDistTags
   ) => Promise<{
@@ -393,10 +396,21 @@ export const createMetadataService = (
   const writePackageEntry = async (
     entry: PackageEntry,
     versionPath: string,
-    writeTarball: (filePath: string) => Promise<void>
+    archive: PackageArchive
   ): Promise<void> => {
     await fs.mkdir(versionPath);
-    await writeTarball(path.join(versionPath, entry.storage.tarballName));
+    const destination = path.join(versionPath, entry.storage.tarballName);
+    if (Buffer.isBuffer(archive)) {
+      // The storage service owns the new file throughout publication.
+      const file = await fs.open(destination, 'wx');
+      try {
+        await file.writeFile(archive);
+      } finally {
+        await file.close();
+      }
+    } else {
+      await fs.rename(archive.downloadedFile, destination);
+    }
     await fs.writeFile(
       path.join(versionPath, 'package.json'),
       JSON.stringify(entry.metadata.manifest, null, 2),
@@ -422,7 +436,7 @@ export const createMetadataService = (
 
   const storePackageEntry = async (
     entry: PackageEntry,
-    writeTarball: (filePath: string) => Promise<void>,
+    archive: PackageArchive,
     overwrite: boolean,
     entries: PackageEntry[],
     tags: PackageDistTags
@@ -437,7 +451,7 @@ export const createMetadataService = (
     const rollback: Array<{ from: string; to: string }> = [];
     let keepBackups = false;
     try {
-      await writePackageEntry(entry, prepared, writeTarball);
+      await writePackageEntry(entry, prepared, archive);
       try {
         await fs.rename(prepared, versionPath);
         rollback.push({ from: versionPath, to: prepared });
@@ -617,13 +631,24 @@ export const createMetadataService = (
 
     addPackageEntry: async (
       entry: PackageEntry,
-      writeTarball: (filePath: string) => Promise<void>,
+      archive: PackageArchive,
       policy: DuplicatePackagePolicy = 'error',
       distTags: PackageDistTags = { latest: entry.metadata.version }
     ): Promise<{
       action: 'added' | 'overwritten' | 'ignored' | 'error';
       message?: string;
     }> => {
+      const { name, version, tarballName } = entry.metadata;
+      if (
+        !isValidPackageName(name) ||
+        !isValidPackageVersion(version) ||
+        entry.storage.version !== version ||
+        entry.storage.tarballName !== tarballName ||
+        tarballName !== createTarballFileName(name, version) ||
+        entry.storage.packagePathSegments.join('/') !== name
+      ) {
+        throw new Error('Invalid package storage identity');
+      }
       const handle = await cacheLock.writeLock();
       try {
         const key = normalizeKey(entry.metadata.name);
@@ -666,7 +691,7 @@ export const createMetadataService = (
         });
         const stored = await storePackageEntry(
           entry,
-          writeTarball,
+          archive,
           existingVersion !== undefined,
           sortedEntries,
           nextTags
