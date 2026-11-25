@@ -21,6 +21,7 @@ const metadataObject = (value: unknown): Record<string, unknown> => {
  * @param apiUrl - Explicit REST API base URL including /service/rest/v1/
  * @param repository - Name of the hosted repository to enumerate
  * @param auth - None or Basic credentials scoped to the supplied API URL
+ * @param maxResponseBytes - Maximum size of each inventory page in bytes.
  * @returns Unique package names in the order encountered, with npm scopes restored
  * @remarks Rejects incomplete or inconsistent inventories rather than returning partial names.
  * The caller must select a hosted repository; repository types are not discovered here.
@@ -29,7 +30,8 @@ const metadataObject = (value: unknown): Record<string, unknown> => {
 export const enumerateNexusPackages = async (
   apiUrl: string,
   repository: string,
-  auth: ImportAuthentication
+  auth: ImportAuthentication,
+  maxResponseBytes?: number
 ): Promise<string[]> => {
   if (auth.type !== 'none' && auth.type !== 'basic') {
     throw new Error('Nexus enumeration requires none or basic authentication');
@@ -43,7 +45,7 @@ export const enumerateNexusPackages = async (
     throw new Error('Nexus API URL must not contain a query');
   }
   base.pathname = `${base.pathname.replace(/\/+$/, '')}/`;
-  const client = createImportHttpClient(auth, [base.href]);
+  const client = createImportHttpClient(auth, [base.href], maxResponseBytes);
   const names = new Set<string>();
   const tokens = new Set<string>();
   let continuationToken: string | null = null;

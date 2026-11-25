@@ -145,7 +145,7 @@ In the administration UI, open "Upload Package" to select files or drag and drop
 If the same package name and version already exist, the server keeps the existing package by default.
 Set `duplicatePackagePolicy` to `overwrite` to replace it, `ignore` to keep it, or `error` to reject the upload.
 
-The default upload request limit is 100 MB. Change it with `maxUploadSizeMb`.
+The default upload request limit is 100 MB. Change it with `maxUploadSizeMb`. During `--import-packages`, the same limit applies to each metadata response and archive download.
 Because `npm publish` embeds the archive as Base64 in JSON, the limit must accommodate a request larger than the archive itself.
 
 ## Package Storage Configuration
@@ -290,6 +290,22 @@ After initialization, start the server and log in with the new account through t
 npm login --registry http://localhost:4873/
 npm whoami --registry http://localhost:4873/
 ```
+
+#### Updating older passwords and npm tokens
+
+Passwords and npm tokens stored in the old SHA-1 format continue to work after the upgrade. Support for this format will end in a future release. The cutoff will be announced in advance.
+
+- When you enter the correct password in the web UI or with `npm login`, the server updates its stored hash to scrypt. The web UI recommends choosing a new password until you change it. You can continue using the registry in the meantime.
+- Each npm token moves to SHA-256 the next time it authenticates. CI and `.npmrc` can keep using the same token value. Open “npm tokens” in the user menu to see each token's migration status or revoke unused tokens. If you choose to rotate a token, confirm the replacement works before revoking the old one.
+- Administrators can open “Reset Password” in the user menu to see how many passwords and npm tokens still use the old format. They can also reset passwords for users who have not signed in.
+
+If an administrator has forgotten their password, stop the server and run the following command. This example uses an administrator named `alice`.
+
+```bash
+npmjs-server --config-file ./config.json --password-reset alice
+```
+
+Enter the new password twice and restart the server. The account keeps its ID, role and two-step authentication settings.
 
 ### User Management
 
@@ -828,13 +844,14 @@ A `—` means that the setting is not available through that method.
 | — | `NPMJS_SERVER_PASSWORD_MIN_SCORE` | `passwordMinScore` | Minimum password strength, 0–4 | `2` |
 | — | `NPMJS_SERVER_PASSWORD_STRENGTH_CHECK` | `passwordStrengthCheck` | Strength checking, `true` / `false` | `true` |
 | — | `NPMJS_SERVER_DUPLICATE_PACKAGE_POLICY` | `duplicatePackagePolicy` | `overwrite`, `ignore`, `error` | `ignore` |
-| `--max-upload-size-mb <size>` | `NPMJS_SERVER_MAX_UPLOAD_SIZE_MB` | `maxUploadSizeMb` | Upload request limit, 1–10000 MB | `100` |
+| `--max-upload-size-mb <size>` | `NPMJS_SERVER_MAX_UPLOAD_SIZE_MB` | `maxUploadSizeMb` | Maximum upload request or import response size, 1–10000 MB | `100` |
 | — | `NPMJS_SERVER_AUTH_FAILURE_DELAY_ENABLED` | — | Delay failed password authentication, `true` / `false` | `true` |
 | — | `NPMJS_SERVER_AUTH_FAILURE_MAX_DELAY` | — | Maximum delay for failed password authentication, in milliseconds | `10000` |
 | — | `NPMJS_SERVER_TOTP_KEY_FILE` | `totpKeyFile` | File containing the TOTP encryption key | `<configDir>/totp.key` |
 | `--proxy` | `NPMJS_SERVER_PROXY_ENABLED` | `proxy.enabled` | Upstream registry proxy, `true` / `false` | `false` |
 | `--proxy-upstream-registry <url>` | `NPMJS_SERVER_PROXY_UPSTREAM_REGISTRY` | `proxy.upstreamRegistry` | Upstream registry HTTP/HTTPS URL | `https://registry.npmjs.org` |
 | `--proxy-package-dir <dir>` | `NPMJS_SERVER_PROXY_PACKAGE_DIR` | `proxy.packageDir` | Proxy cache directory | `<configDir>/proxy-packages` |
+| `--password-reset <username>` | — | — | Reset a user's password while the server is stopped | — |
 | `--totp-reset <username>` | — | — | Reset a user's TOTP while the server is stopped | — |
 | `--auth-init` | — | — | Create an administrator interactively and exit | — |
 | `--import-packages` | — | — | Interactively import from a hosted registry while the server is stopped | — |

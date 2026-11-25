@@ -95,6 +95,42 @@ describe('hosted package import', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  test('limits downloads by the actual byte count, including chunked responses', async () => {
+    const bytes = Buffer.from('sample contents');
+    for (const advertise of [true, false]) {
+      vi.stubGlobal(
+        'fetch',
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(bytes.subarray(0, 5));
+                controller.enqueue(bytes.subarray(5));
+                controller.close();
+              },
+            }),
+            {
+              headers: advertise
+                ? { 'content-length': String(bytes.length) }
+                : {},
+            }
+          )
+      );
+      try {
+        const small = createImportHttpClient({ type: 'none' }, [], 8);
+        await expect(small.buffer(url)).rejects.toThrow(/size limit/i);
+        const exact = createImportHttpClient(
+          { type: 'none' },
+          [],
+          bytes.length
+        );
+        expect(await exact.buffer(url)).toEqual(bytes);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  });
+
   const publish = async (
     name: string,
     versions: string[],
@@ -140,6 +176,19 @@ describe('hosted package import', () => {
       dryRun,
       logger,
     });
+
+  test('leaves a linked destination scope untouched during import', async () => {
+    await publish('@demo/fixture', ['1.0.0'], { latest: '1.0.0' });
+    const storage = path.join(root, 'packages');
+    const sibling = path.join(root, 'sibling');
+    await fs.mkdir(storage);
+    await fs.mkdir(sibling);
+    await fs.symlink(sibling, path.join(storage, '@demo'), 'dir');
+    const result = await importer(['@demo/fixture']).run();
+    expect(result.failed).toBeGreaterThan(0);
+    expect(result.imported).toBe(0);
+    expect(await fs.readdir(sibling)).toEqual([]);
+  });
 
   const cli = async (
     dryRun: boolean,

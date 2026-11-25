@@ -3,7 +3,6 @@
 // License under MIT.
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { promises as fs } from 'fs';
 import { join } from 'path';
 import type { ReaderWriterLock } from 'async-primitives';
 import type { Logger } from '../../../types.ts';
@@ -16,6 +15,11 @@ import {
   name as packageName,
   version,
 } from '../../../generated/packageMetadata.ts';
+import {
+  loginBodyLimit,
+  publicReadRateLimit,
+} from '../../../services/requestLimits.ts';
+import { isLegacyCredentialHash } from '../../../utils/legacyCredentials.ts';
 import { streamFile } from '../../../utils/fileStreaming.ts';
 
 /**
@@ -66,6 +70,8 @@ export interface ConfigResponse {
     username: string;
     role: string;
     authenticated: boolean;
+    /** Whether the account previously used the legacy password format. */
+    passwordChangeRecommended?: true;
   } | null;
 }
 
@@ -83,6 +89,13 @@ export interface UserManagementRequest {
  * User list response
  */
 export interface UserListResponse {
+  /** Number of credentials that still require the legacy verifier. */
+  credentialMigration: {
+    /** Accounts whose password has not been verified or reset since upgrading. */
+    passwords: number;
+    /** Issued npm tokens that have not been used or revoked since upgrading. */
+    npmTokens: number;
+  };
   users: Array<{
     id: string;
     username: string;
@@ -228,6 +241,7 @@ export const registerUiRoutes = async (
   // POST /api/ui/config - Application configuration (public endpoint)
   fastify.post(
     '/config',
+    { config: { rateLimit: publicReadRateLimit } },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         let currentUser = null;
@@ -242,6 +256,7 @@ export const registerUiRoutes = async (
                 username: session.username,
                 role: session.role,
                 authenticated: true,
+                passwordChangeRecommended: session.passwordChangeRecommended,
               };
             }
           }
@@ -294,6 +309,19 @@ export const registerUiRoutes = async (
             const users = await userService.getAllUsers();
 
             const response: UserListResponse = {
+              credentialMigration: {
+                passwords: users.filter((user) =>
+                  isLegacyCredentialHash(user.passwordHash)
+                ).length,
+                npmTokens: users.reduce(
+                  (count, user) =>
+                    count +
+                    (user.npmTokens ?? []).filter((token) =>
+                      isLegacyCredentialHash(token.tokenHash)
+                    ).length,
+                  0
+                ),
+              },
               users: users.map((user) => ({
                 id: user.id,
                 username: user.username,
@@ -469,6 +497,7 @@ export const registerUiRoutes = async (
   fastify.post(
     '/password',
     {
+      bodyLimit: loginBodyLimit,
       preHandler: [sessionOnlyAuth],
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -523,13 +552,12 @@ export const registerUiRoutes = async (
           );
 
           const updated = await userService.updateUser(
-            authRequest.user?.username || '',
-            {
-              password: body.newPassword,
-            }
+            user.username,
+            { password: body.newPassword },
+            user
           );
           if (!updated) {
-            return reply.status(404).send({ error: 'User not found' });
+            return reply.status(401).send({ error: 'Sign in again' });
           }
 
           logger.info(
@@ -650,6 +678,7 @@ export const registerUiRoutes = async (
   fastify.get(
     '/icon/:id/:version',
     {
+      config: { rateLimit: publicReadRateLimit },
       preHandler: async (request: FastifyRequest, reply: FastifyReply) => {
         const authMode = authService.getAuthMode();
         if (authMode === 'full') {
@@ -668,84 +697,32 @@ export const registerUiRoutes = async (
       try {
         logger.info(`Serving icon for package: ${packageId} ${version}`);
 
-        // Try to get icon from package metadata or storage
-        const lowerVersion = version.toLowerCase();
-
-        // Look for icon file in package directory (preserve original packageId case)
-        const packageDir = join(packagesRoot, packageId, lowerVersion);
-        const iconExtensions = ['png', 'jpg', 'jpeg', 'gif', 'svg'];
-
-        for (const ext of iconExtensions) {
-          try {
-            const iconPath = join(packageDir, `icon.${ext}`);
-            await fs.access(iconPath); // Check if file exists
-
-            // Use streamFile with appropriate content type and cache control
-            const contentType =
-              ext === 'svg' ? 'image/svg+xml' : `image/${ext}`;
-            logger.info(`Icon served successfully: ${packageId} ${version}`);
-
-            await streamFile(
-              logger,
-              locker,
-              iconPath,
-              reply,
-              {
-                contentType,
-                cacheControl: 'public, max-age=3600',
-              },
-              request.abortSignal
+        // Try the registered version first, then the latest version as a fallback.
+        const requested = metadataService.getPackageEntry(packageId, version);
+        const latest = metadataService.getLatestPackageEntry(packageId);
+        for (const entry of new Set([requested, latest])) {
+          if (!entry) continue;
+          for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'svg']) {
+            const icon = join(
+              ...entry.storage.packagePathSegments,
+              entry.storage.version,
+              `icon.${ext}`
             );
-            return;
-          } catch (error: any) {
-            // Continue to next extension
-          }
-        }
-
-        // Icon not found in specified version, try latest version as fallback
-        logger.info(
-          `Icon not found in version ${version}, trying latest version for package: ${packageId}`
-        );
-
-        const latestEntry = metadataService.getLatestPackageEntry(packageId);
-        if (latestEntry && latestEntry.metadata.version !== version) {
-          logger.info(
-            `Trying fallback to latest version: ${latestEntry.metadata.version}`
-          );
-
-          const latestPackageDir = join(
-            packagesRoot,
-            ...latestEntry.storage.packagePathSegments,
-            latestEntry.metadata.version
-          );
-
-          for (const ext of iconExtensions) {
-            try {
-              const iconPath = join(latestPackageDir, `icon.${ext}`);
-              await fs.access(iconPath); // Check if file exists
-
-              // Use streamFile with appropriate content type and cache control
-              const contentType =
-                ext === 'svg' ? 'image/svg+xml' : `image/${ext}`;
-              logger.info(
-                `Icon served from latest version: ${packageId} ${latestEntry.metadata.version} (requested: ${version})`
-              );
-
+            if (
               await streamFile(
                 logger,
                 locker,
-                iconPath,
+                packagesRoot,
+                icon,
                 reply,
                 {
-                  contentType,
+                  contentType: ext === 'svg' ? 'image/svg+xml' : `image/${ext}`,
                   cacheControl: 'public, max-age=3600',
                 },
                 request.abortSignal
-              );
+              )
+            )
               return;
-            } catch (error: any) {
-              // Continue to next extension
-            }
           }
         }
 

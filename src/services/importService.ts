@@ -9,8 +9,11 @@ import type { Logger } from '../types.ts';
 import {
   isValidPackageName,
   isValidPackageVersion,
-  packageNameToPathSegments,
 } from '../utils/npmPackage.ts';
+import {
+  preparePackageDirectory,
+  readStorageFile,
+} from '../utils/storagePaths.ts';
 import { writePrivateFile } from '../utils/atomicFile.ts';
 import { createMetadataService, type PackageEntry } from './metadataService.ts';
 import { createPackageEntryFromTarball } from './npmPublishService.ts';
@@ -56,6 +59,8 @@ export interface ImportOptions {
    * @returns The complete name inventory
    */
   enumerate: () => Promise<string[]>;
+  /** Maximum number of decoded bytes to accept from each source response. */
+  maxResponseBytes?: number;
   /** Reports the inventory without modifying the destination. */
   dryRun: boolean;
   /** Progress and diagnostic output. */
@@ -152,14 +157,15 @@ const metadataContents = (entry: PackageEntry): string =>
   );
 
 const saveVersion = async (
-  root: string,
+  packageRoot: string,
   entry: PackageEntry,
   bytes: Buffer,
   exists: boolean
 ): Promise<void> => {
-  const packageRoot = path.join(root, ...entry.storage.packagePathSegments);
   const versionRoot = path.join(packageRoot, entry.metadata.version);
   if (exists) {
+    if (!(await fs.lstat(versionRoot)).isDirectory())
+      throw new Error('Invalid version directory');
     await writePrivateFile(
       path.join(versionRoot, 'metadata.json'),
       metadataContents(entry)
@@ -173,7 +179,8 @@ const saveVersion = async (
     });
     await fs.writeFile(
       path.join(staging, 'package.json'),
-      JSON.stringify(entry.metadata.manifest, null, 2)
+      JSON.stringify(entry.metadata.manifest, null, 2),
+      { flag: 'wx' }
     );
     await writePrivateFile(
       path.join(staging, 'metadata.json'),
@@ -195,7 +202,11 @@ export const createImportService = (options: ImportOptions): ImportService => {
   const registry = parseImportUrl(options.registryUrl);
   registry.pathname = `${registry.pathname.replace(/\/+$/, '')}/`;
   if (registry.search) throw new Error('Registry URL must not contain a query');
-  const client = createImportHttpClient(options.auth, [registry.href]);
+  const client = createImportHttpClient(
+    options.auth,
+    [registry.href],
+    options.maxResponseBytes
+  );
   return {
     run: async () => {
       const result: ImportResult = {
@@ -270,16 +281,22 @@ export const createImportService = (options: ImportOptions): ImportService => {
           `${name}: ${versionNames.join(', ') || '(no versions)'}`
         );
         if (options.dryRun) continue;
-        const packageRoot = path.join(
-          options.packagesRoot,
-          ...packageNameToPathSegments(name)
-        );
-        const tagsPath = path.join(packageRoot, 'dist-tags.json');
+        let packageRoot: string;
+        let tagsPath: string;
         let existingTags: Record<string, string>;
         try {
+          packageRoot = await preparePackageDirectory(
+            options.packagesRoot,
+            name
+          );
+          tagsPath = path.join(packageRoot, 'dist-tags.json');
           try {
             const stored = object(
-              JSON.parse(await fs.readFile(tagsPath, 'utf8'))
+              JSON.parse(
+                (await readStorageFile(packageRoot, 'dist-tags.json')).toString(
+                  'utf8'
+                )
+              )
             );
             existingTags =
               stored.format === 'npmjs-server/dist-tags-v1'
@@ -295,7 +312,6 @@ export const createImportService = (options: ImportOptions): ImportService => {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
             existingTags = metadata.getDistTags(name);
           }
-          await fs.mkdir(packageRoot, { recursive: true });
           // Freeze current tags before adding versions so interrupted imports never synthesize latest.
           await writePrivateFile(
             tagsPath,
@@ -326,8 +342,9 @@ export const createImportService = (options: ImportOptions): ImportService => {
             const existing = metadata.getPackageEntry(name, version);
             let bytes: Buffer;
             if (existing) {
-              bytes = await fs.readFile(
-                path.join(packageRoot, version, existing.metadata.tarballName)
+              bytes = await readStorageFile(
+                packageRoot,
+                path.join(version, existing.metadata.tarballName)
               );
               if (dist.shasum !== undefined || dist.integrity !== undefined) {
                 if (!matchesChecksums(bytes, dist)) {
@@ -391,7 +408,7 @@ export const createImportService = (options: ImportOptions): ImportService => {
               warn(
                 `${label}: source checksums unavailable; identity was validated`
               );
-            await saveVersion(options.packagesRoot, entry, bytes, !!existing);
+            await saveVersion(packageRoot, entry, bytes, !!existing);
             available.add(version);
             if (existing) result.skipped++;
             else result.imported++;

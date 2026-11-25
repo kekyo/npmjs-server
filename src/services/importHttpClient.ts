@@ -61,13 +61,17 @@ export const parseImportUrl = (value: string): URL => {
  * Creates a source reader that scopes credentials and rechecks every redirect.
  * @param auth - Source credentials
  * @param credentialUrls - Explicit URL prefixes authorized to receive credentials
+ * @param maxBytes - Maximum size of a decoded response in bytes (default 100 MiB).
  * @returns Source HTTP client
  * @remarks Redirects may leave these prefixes, but never carry credentials with them.
  */
 export const createImportHttpClient = (
   auth: ImportAuthentication,
-  credentialUrls: string[]
+  credentialUrls: string[],
+  maxBytes: number = 100 * 1024 * 1024
 ): ImportHttpClient => {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1)
+    throw new Error('Invalid source response size limit');
   const prefixes = credentialUrls.map((value) => {
     const url = parseImportUrl(value);
     url.pathname = `${url.pathname.replace(/\/+$/, '')}/`;
@@ -117,10 +121,31 @@ export const createImportHttpClient = (
         await response.body?.cancel();
         throw new Error(`Source returned HTTP ${response.status}`);
       }
+      const tooLarge = new Error('Source response exceeds the size limit');
+      if (Number(response.headers.get('content-length')) > maxBytes) {
+        await response.body?.cancel();
+        throw tooLarge;
+      }
+      if (!response.body) return Buffer.alloc(0);
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
       try {
-        return Buffer.from(await response.arrayBuffer());
-      } catch {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return Buffer.concat(chunks, size);
+          size += value.byteLength;
+          if (size > maxBytes) {
+            await reader.cancel();
+            throw tooLarge;
+          }
+          chunks.push(value);
+        }
+      } catch (error) {
+        if (error === tooLarge) throw error;
         throw new Error('Source response was interrupted');
+      } finally {
+        reader.releaseLock();
       }
     }
     throw new Error('Too many source redirects');

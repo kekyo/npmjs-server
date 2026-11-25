@@ -65,6 +65,7 @@ export const runImportPackages = async (
     input: process.stdin,
     output: process.stdout,
   });
+  const maxResponseBytes = (config.maxUploadSizeMb ?? 100) * 1024 * 1024;
   const input = async (prompt: string, defaultValue: string | undefined) =>
     await readImportInput(() => promptInput(rl, prompt, defaultValue), rl);
   const confirm = async (prompt: string) =>
@@ -182,7 +183,12 @@ export const runImportPackages = async (
       const repository = await input('Nexus repository name', undefined);
       if (!repository) throw new Error('Nexus repository name is required');
       enumerate = async (auth) =>
-        await enumerateNexusPackages(nexusApiUrl, repository, auth);
+        await enumerateNexusPackages(
+          nexusApiUrl,
+          repository,
+          auth,
+          maxResponseBytes
+        );
     }
     const configuredAuth = npmrc?.authenticationFor(registryUrl);
     const auth =
@@ -204,6 +210,7 @@ export const runImportPackages = async (
       return 0;
     }
     const service = createImportService({
+      maxResponseBytes,
       registryUrl,
       packagesRoot,
       baseUrl: config.baseUrl || '',
