@@ -884,6 +884,15 @@ Under MIT.
 
 ## History
 
+* 1.1.0
+  * The registry now hashes passwords with scrypt and npm tokens with SHA-256. It upgrades each SHA-1 hash from 1.0.0 or earlier the next time it verifies that password or token. Existing tokens in `.npmrc` and CI keep working.
+  * The web UI recommends changing a migrated password and shows users the migration status of their npm tokens. Administrators can see how many passwords and tokens still use the old format. See [Updating older passwords and npm tokens](#updating-older-passwords-and-npm-tokens).
+  * Added `--password-reset <username>` to reset a user's password while the server is stopped. The account keeps its role, two-step authentication settings, and npm tokens.
+  * The web UI now redirects users only within the registry's origin after login. If a password changes between verification and token issuance, `npm login` asks the user to sign in again.
+  * Added per-IP rate limits for web and npm login, configuration reads, and package icon requests. Clients that exceed a limit receive HTTP 429 with a `Retry-After` header.
+  * The registry now serves tarballs, package icons, and web UI assets only from their designated directories. Publishing and importing reject symbolic links in package directory paths beneath the storage root.
+  * `--import-packages` now applies `maxUploadSizeMb` to each package metadata response, Nexus inventory page, and tarball download.
+  * GitHub Actions now builds and tests the registry and runs CodeQL scans on TypeScript and workflow files.
 * 1.0.0
   * Fixed a path traversal issue in package publishing. The registry now rejects invalid versions before saving uploads from npm or the web UI.
   * Fixed a race between concurrent publishes of the same version. The `error` and `ignore` policies now preserve the accepted tarball and its metadata. Explicit overwrites retain file permissions and restore the previous version if saving dist-tags fails.
