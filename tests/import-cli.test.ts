@@ -649,8 +649,18 @@ describe('offline import CLI lifecycle', () => {
         'plain'
       );
       const completed = path.join(destination, '1.0.0', 'plain-1.0.0.tgz');
-      expect(await fs.readFile(completed)).toEqual(archives.get('1.0.0'));
-      const before = await fs.stat(completed);
+      // Read contents and identity from the same opened archive at each checkpoint.
+      const snapshot = async () => {
+        const file = await fs.open(completed, 'r');
+        try {
+          const { ino, mtimeMs } = await file.stat();
+          return { ino, mtimeMs, bytes: await file.readFile() };
+        } finally {
+          await file.close();
+        }
+      };
+      const before = await snapshot();
+      expect(before.bytes).toEqual(archives.get('1.0.0'));
       await expect(
         fs.stat(path.join(destination, '2.0.0'))
       ).rejects.toMatchObject({ code: 'ENOENT' });
@@ -660,8 +670,7 @@ describe('offline import CLI lifecycle', () => {
       expect(resumed.output).toContain(
         'Imported: 1; Skipped: 1; Conflicts: 0; Failed: 0'
       );
-      expect(await fs.readFile(completed)).toEqual(archives.get('1.0.0'));
-      expect((await fs.stat(completed)).mtimeMs).toBe(before.mtimeMs);
+      expect(await snapshot()).toEqual(before);
       expect(
         await fs.readFile(path.join(destination, '2.0.0', 'plain-2.0.0.tgz'))
       ).toEqual(archives.get('2.0.0'));

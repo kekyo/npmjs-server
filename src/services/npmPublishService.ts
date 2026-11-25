@@ -2,7 +2,6 @@
 // Copyright (c) Kouji Matsui (@kekyo@mi.kekyo.net)
 // License under MIT.
 
-import fs from 'fs/promises';
 import type { DuplicatePackagePolicy, Logger } from '../types.ts';
 import {
   calculateDist,
@@ -116,7 +115,7 @@ export const publishNpmTarball = async (input: {
 
   const addResult = await metadataService.addPackageEntry(
     entry,
-    async (filePath) => await fs.writeFile(filePath, tarball),
+    tarball,
     policy,
     distTags
   );

@@ -142,7 +142,7 @@ npm publish ./example-package-1.0.0.tgz --registry http://localhost:4873/
 同じパッケージ名・バージョンが存在する場合、既定では既存のパッケージを維持します。
 `duplicatePackagePolicy`で、上書きする`overwrite`、既存の内容を維持する`ignore`、エラーにする`error`を選べます。
 
-アップロード要求の上限は既定で100MBです。
+アップロード要求の上限は既定で100MBです。`--import-packages` で取得するメタデータとアーカイブにも、応答ごとに同じ上限が適用されます。
 `maxUploadSizeMb`で変更できます。`npm publish`はアーカイブをBase64でJSONに格納するため、アーカイブのサイズより大きな上限が必要です。
 
 ---
@@ -731,6 +731,29 @@ npm install
 
 ## 備考
 
+### 旧形式のパスワードとnpmトークンを更新する
+
+旧バージョン (<=1.0.0) でSHA-1形式で保存したパスワードとnpmトークンは、サーバーを更新した後も使えます。
+旧形式への対応は今後のリリースで終了する予定です。終了時期はあらためてお知らせします。
+
+- パスワードは、管理UIまたは `npm login` で正しいパスワードを入力すると、サーバーがscrypt形式で保存し直します。
+  管理UIには新しいパスワードを設定するまで「パスワード変更」の案内が表示されます。変更は後でもかまいません。
+- npmトークンは1個ずつ、次にそのトークンで認証したときにSHA-256形式に移行します。
+  CIや `.npmrc` に設定した値はそのまま使えます。ユーザーメニューの「npm token」で各トークンの移行状況を確認できます。
+  使っていないトークンはここで失効させてください。
+  トークンを交換する場合は、新しいトークンで認証できることを確認してから古いトークンを失効させてください。
+- 管理者はユーザーメニューの「パスワードリセット」で、旧形式のまま残っているパスワードとnpmトークンの件数を確認できます。
+  ログインしていないユーザーのパスワードもここで再設定できます。
+
+管理者がパスワードを忘れたときは、サーバーを停止して次のコマンドを実行してください。
+ここでは管理者のユーザー名を `alice` とします。
+
+```bash
+npmjs-server --config-file ./config.json --password-reset alice
+```
+
+新しいパスワードを2回入力してサーバーを再起動します。ユーザーID、権限、二段階認証の設定は引き継がれます。
+
 ### テスト環境
 
 Linux上のNode.js 24とnpmクライアントで、パッケージの公開・取得と認証を確認しています。
@@ -823,13 +846,14 @@ TOTPの試行回数制限は別に適用します。
 | — | `NPMJS_SERVER_PASSWORD_MIN_SCORE` | `passwordMinScore` | パスワードの最小強度、0～4 | `2` |
 | — | `NPMJS_SERVER_PASSWORD_STRENGTH_CHECK` | `passwordStrengthCheck` | 強度判定、`true` / `false` | `true` |
 | — | `NPMJS_SERVER_DUPLICATE_PACKAGE_POLICY` | `duplicatePackagePolicy` | `overwrite`, `ignore`, `error` | `ignore` |
-| `--max-upload-size-mb <size>` | `NPMJS_SERVER_MAX_UPLOAD_SIZE_MB` | `maxUploadSizeMb` | アップロード要求の上限、1～10000MB | `100` |
+| `--max-upload-size-mb <size>` | `NPMJS_SERVER_MAX_UPLOAD_SIZE_MB` | `maxUploadSizeMb` | アップロード要求とインポート時の各応答の上限、1～10000MB | `100` |
 | — | `NPMJS_SERVER_AUTH_FAILURE_DELAY_ENABLED` | — | パスワード認証失敗時の遅延、`true` / `false` | `true` |
 | — | `NPMJS_SERVER_AUTH_FAILURE_MAX_DELAY` | — | パスワード認証失敗時の最大遅延、ミリ秒 | `10000` |
 | — | `NPMJS_SERVER_TOTP_KEY_FILE` | `totpKeyFile` | TOTP登録キーを暗号化する鍵の保存先 | `<configDir>/totp.key` |
 | `--proxy` | `NPMJS_SERVER_PROXY_ENABLED` | `proxy.enabled` | 上位レジストリへのプロキシ、`true` / `false` | `false` |
 | `--proxy-upstream-registry <url>` | `NPMJS_SERVER_PROXY_UPSTREAM_REGISTRY` | `proxy.upstreamRegistry` | 上位レジストリのHTTP/HTTPS URL | `https://registry.npmjs.org` |
 | `--proxy-package-dir <dir>` | `NPMJS_SERVER_PROXY_PACKAGE_DIR` | `proxy.packageDir` | プロキシのキャッシュ保存先 | `<configDir>/proxy-packages` |
+| `--password-reset <username>` | — | — | サーバー停止中に指定ユーザーのパスワードを再設定 | — |
 | `--totp-reset <username>` | — | — | サーバー停止中に指定ユーザーのTOTPをリセット | — |
 | `--auth-init` | — | — | 対話形式で管理者を作成して終了 | — |
 | `--import-packages` | — | — | サーバー停止中にhostedレジストリから対話形式で取り込む | — |

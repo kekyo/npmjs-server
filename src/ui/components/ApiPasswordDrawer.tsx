@@ -19,6 +19,9 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteIcon from '@mui/icons-material/Delete';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
+import { TypedMessage } from 'typed-message';
+import { messages } from '../../generated/messages.ts';
+import type { NpmTokenListResponse } from '../../services/userService.ts';
 import { apiFetch } from '../utils/apiClient';
 
 interface ApiPasswordDrawerProps {
@@ -26,19 +29,8 @@ interface ApiPasswordDrawerProps {
   onClose: () => void;
 }
 
-interface NpmToken {
-  key: string;
-  label: string;
-  createdAt: string;
-  lastUsedAt?: string;
-}
-
-interface NpmTokenListResponse {
-  npmTokens: NpmToken[];
-}
-
 const ApiPasswordDrawer = ({ open, onClose }: ApiPasswordDrawerProps) => {
-  const [tokens, setTokens] = useState<NpmToken[]>([]);
+  const [tokens, setTokens] = useState<NpmTokenListResponse['npmTokens']>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -160,15 +152,31 @@ const ApiPasswordDrawer = ({ open, onClose }: ApiPasswordDrawerProps) => {
               >
                 <ListItemText
                   primary={token.label}
-                  secondary={`key: ${token.key} / created: ${new Date(
-                    token.createdAt
-                  ).toLocaleString()}${
-                    token.lastUsedAt
-                      ? ` / last used: ${new Date(
-                          token.lastUsedAt
-                        ).toLocaleString()}`
-                      : ''
-                  }`}
+                  secondary={
+                    <>
+                      {`key: ${token.key} / created: ${new Date(
+                        token.createdAt
+                      ).toLocaleString()}${
+                        token.lastUsedAt
+                          ? ` / last used: ${new Date(
+                              token.lastUsedAt
+                            ).toLocaleString()}`
+                          : ''
+                      }`}
+                      {token.migrationStatus && (
+                        <>
+                          <br />
+                          <TypedMessage
+                            message={
+                              token.migrationStatus === 'pending'
+                                ? messages.TOKEN_MIGRATION_PENDING
+                                : messages.TOKEN_MIGRATION_UPGRADED
+                            }
+                          />
+                        </>
+                      )}
+                    </>
+                  }
                 />
               </ListItem>
             ))}

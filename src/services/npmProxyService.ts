@@ -465,7 +465,7 @@ export const createNpmProxyService = (
 
       const addResult = await metadataService.addPackageEntry(
         entry,
-        async (filePath) => await fs.rename(tmpPath, filePath),
+        { downloadedFile: tmpPath },
         'ignore',
         input.distTags
       );

@@ -8,6 +8,12 @@ import Fastify, {
   type FastifyReply,
   type FastifyRequest,
 } from 'fastify';
+import rateLimit from '@fastify/rate-limit';
+import {
+  loginBodyLimit,
+  loginRateLimit,
+  publicReadRateLimit,
+} from './services/requestLimits.ts';
 import fastifyPassport from '@fastify/passport';
 import fastifySecureSession from '@fastify/secure-session';
 import fastifyStatic from '@fastify/static';
@@ -212,6 +218,12 @@ export const createFastifyInstance = async (
       disableRequestLogging: true, // Use our custom request logging
     }),
     rewriteUrl: createRewriteUrl(urlResolver, logger),
+  });
+
+  await fastify.register(rateLimit, {
+    global: false,
+    timeWindow: 60_000,
+    cache: 5000,
   });
 
   // Add content type parser for binary data (package uploads)
@@ -471,6 +483,7 @@ export const createFastifyInstance = async (
       username: user.username,
       role: user.role,
       authVersion: user.authVersion ?? 0,
+      passwordChangeRecommended: user.passwordChangeRecommended,
       expirationHours,
     });
     // Set session cookie; @fastify/cookie expresses maxAge in seconds.
@@ -496,6 +509,8 @@ export const createFastifyInstance = async (
   fastify.post(
     '/api/auth/login',
     {
+      bodyLimit: loginBodyLimit,
+      config: { rateLimit: loginRateLimit },
       schema: {
         body: {
           type: 'object',
@@ -554,6 +569,7 @@ export const createFastifyInstance = async (
           },
         };
       } catch (error) {
+        if ((error as { statusCode?: number }).statusCode === 503) throw error;
         if ((error as { statusCode?: number }).statusCode === 429) {
           return reply
             .code(429)
@@ -622,65 +638,71 @@ export const createFastifyInstance = async (
       user: {
         username: session.username,
         role: session.role,
+        passwordChangeRecommended: session.passwordChangeRecommended,
       },
     };
   });
 
   // Serve config endpoint without authentication (public endpoint per CLAUDE.md spec)
-  fastify.get('/api/config', async (request: FastifyRequest, _reply) => {
-    // Get current user from session if available
-    let currentUser = null;
+  fastify.get(
+    '/api/config',
+    { config: { rateLimit: publicReadRateLimit } },
+    async (request: FastifyRequest, _reply) => {
+      // Get current user from session if available
+      let currentUser = null;
 
-    // Check session for current user (but don't require authentication)
-    try {
-      const sessionToken = request.cookies?.sessionToken;
-      if (sessionToken) {
-        const session = await sessionService.validateSession(sessionToken);
-        if (session) {
-          currentUser = {
-            username: session.username,
-            role: session.role,
-            authenticated: true,
-          };
+      // Check session for current user (but don't require authentication)
+      try {
+        const sessionToken = request.cookies?.sessionToken;
+        if (sessionToken) {
+          const session = await sessionService.validateSession(sessionToken);
+          if (session) {
+            currentUser = {
+              username: session.username,
+              role: session.role,
+              authenticated: true,
+              passwordChangeRecommended: session.passwordChangeRecommended,
+            };
+          }
         }
+      } catch (error) {
+        logger.error(`Error checking authentication for /api/config: ${error}`);
       }
-    } catch (error) {
-      logger.error(`Error checking authentication for /api/config: ${error}`);
+
+      // Get available languages from locale directory
+      let availableLanguages: string[] = [];
+      try {
+        const localeDir = resolveEnvironmentPath(
+          ['ui', 'public', 'locale'],
+          ['ui', 'locale']
+        );
+
+        const files = await fs.readdir(localeDir);
+        availableLanguages = files
+          .filter((f) => f.endsWith('.json') && f !== 'fallback.json')
+          .map((f) => f.replace('.json', ''));
+      } catch (error) {
+        logger.error(`Failed to read locale directory: ${error}`);
+        availableLanguages = ['en']; // Fallback to English
+      }
+
+      return {
+        realm: config.realm || `${packageName} ${version}`,
+        name: packageName,
+        version: version,
+        git_commit_hash: 'unknown',
+        serverUrl: serverUrl,
+        authMode: authService.getAuthMode(),
+        authEnabled: {
+          general: authService.isAuthRequired('general'),
+          publish: authService.isAuthRequired('publish'),
+          admin: authService.isAuthRequired('admin'),
+        },
+        currentUser: currentUser,
+        availableLanguages: availableLanguages,
+      };
     }
-
-    // Get available languages from locale directory
-    let availableLanguages: string[] = [];
-    try {
-      const localeDir = resolveEnvironmentPath(
-        ['ui', 'public', 'locale'],
-        ['ui', 'locale']
-      );
-
-      const files = await fs.readdir(localeDir);
-      availableLanguages = files
-        .filter((f) => f.endsWith('.json') && f !== 'fallback.json')
-        .map((f) => f.replace('.json', ''));
-    } catch (error) {
-      logger.error(`Failed to read locale directory: ${error}`);
-      availableLanguages = ['en']; // Fallback to English
-    }
-
-    return {
-      realm: config.realm || `${packageName} ${version}`,
-      name: packageName,
-      version: version,
-      git_commit_hash: 'unknown',
-      serverUrl: serverUrl,
-      authMode: authService.getAuthMode(),
-      authEnabled: {
-        general: authService.isAuthRequired('general'),
-        publish: authService.isAuthRequired('publish'),
-        admin: authService.isAuthRequired('admin'),
-      },
-      currentUser: currentUser,
-      availableLanguages: availableLanguages,
-    };
-  });
+  );
 
   // Register npm registry routes
   try {
@@ -757,13 +779,18 @@ export const createFastifyInstance = async (
   const publicPath = resolveEnvironmentPath(['ui', 'public'], ['ui']);
 
   // Helper function to serve static files using streaming
-  const serveStaticFile = (
+  const serveStaticFile = async (
+    root: string,
     filePath: string,
     reply: FastifyReply,
     signal?: AbortSignal
   ) => {
     // Use the unified file streaming helper
-    return streamFile(logger, locker, filePath, reply, {}, signal);
+    if (
+      !(await streamFile(logger, locker, root, filePath, reply, {}, signal))
+    ) {
+      await reply.status(404).send({ error: 'File not found' });
+    }
   };
 
   // Serve UI at root path with Content Negotiation
@@ -779,40 +806,49 @@ export const createFastifyInstance = async (
     }
 
     // Serve UI for non-JSON requests
-    const indexPath = path.join(uiPath, 'index.html');
-    return serveStaticFile(indexPath, reply, request.abortSignal);
+    return serveStaticFile(uiPath, 'index.html', reply, request.abortSignal);
   });
 
   // Serve login page
   fastify.get('/login', (request, reply) => {
-    const loginPath = path.join(uiPath, 'login.html');
-    return serveStaticFile(loginPath, reply, request.abortSignal);
+    return serveStaticFile(uiPath, 'login.html', reply, request.abortSignal);
   });
 
   // Serve other UI assets
   fastify.get('/assets/*', (request, reply) => {
     const assetPath = (request.params as any)['*'];
-    const fullPath = path.join(uiPath, 'assets', assetPath);
-    return serveStaticFile(fullPath, reply, request.abortSignal);
+    return serveStaticFile(
+      path.join(uiPath, 'assets'),
+      assetPath,
+      reply,
+      request.abortSignal
+    );
   });
 
   // Serve favicon
   fastify.get('/favicon.ico', (request, reply) => {
-    const faviconPath = path.join(publicPath, 'favicon.ico');
-    return serveStaticFile(faviconPath, reply, request.abortSignal);
+    return serveStaticFile(
+      publicPath,
+      'favicon.ico',
+      reply,
+      request.abortSignal
+    );
   });
 
   // Serve icon
   fastify.get('/icon.png', (request, reply) => {
-    const iconPath = path.join(publicPath, 'icon.png');
-    return serveStaticFile(iconPath, reply, request.abortSignal);
+    return serveStaticFile(publicPath, 'icon.png', reply, request.abortSignal);
   });
 
   // Serve locale files for internationalization
   fastify.get('/locale/*', (request, reply) => {
     const localePath = (request.params as any)['*'];
-    const fullPath = path.join(publicPath, 'locale', localePath);
-    return serveStaticFile(fullPath, reply, request.abortSignal);
+    return serveStaticFile(
+      path.join(publicPath, 'locale'),
+      localePath,
+      reply,
+      request.abortSignal
+    );
   });
 
   // Store services on fastify instance for cleanup

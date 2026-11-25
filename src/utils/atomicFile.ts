@@ -3,7 +3,7 @@
 // License under MIT.
 
 import { constants } from 'fs';
-import { access, open, rename, rm, stat } from 'fs/promises';
+import { open, rename, rm } from 'fs/promises';
 import { randomBytes } from 'crypto';
 
 /**
@@ -16,8 +16,19 @@ export const getWritableFileMode = async (
   filePath: string
 ): Promise<number | undefined> => {
   try {
-    await access(filePath, constants.W_OK);
-    return (await stat(filePath)).mode & 0o777;
+    const file = await open(
+      filePath,
+      constants.O_WRONLY |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0)
+    );
+    try {
+      const stats = await file.stat();
+      if (!stats.isFile()) throw new Error('Destination is not a regular file');
+      return stats.mode & 0o777;
+    } finally {
+      await file.close();
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     return undefined;

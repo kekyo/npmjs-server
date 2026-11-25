@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { createFileItem, createTarPacker } from 'tar-vern';
 import { join } from 'node:path';
@@ -54,6 +55,27 @@ describe('Authentication through the Vite development server', () => {
 
   afterEach(async () => {
     await server?.close();
+  });
+
+  it('gives different network clients independent request quotas', async () => {
+    const remainingFor = async (localAddress: string): Promise<number> =>
+      await new Promise((resolve, reject) => {
+        const req = get(
+          new URL('api/config', baseUrl),
+          { localAddress, agent: false },
+          (response) => {
+            response.resume();
+            response.once('end', () =>
+              resolve(Number(response.headers['x-ratelimit-remaining']))
+            );
+          }
+        );
+        req.on('error', reject);
+      });
+    const first = await remainingFor('127.0.0.1');
+    expect(first).toBeGreaterThan(0);
+    expect(await remainingFor('127.0.0.2')).toBe(first);
+    expect(await remainingFor('127.0.0.1')).toBe(first - 1);
   });
 
   it('delivers the session cookie separately and authorizes package uploads after login', async () => {

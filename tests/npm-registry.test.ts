@@ -13,6 +13,8 @@ import {
 import { createConsoleLogger } from '../src/logger';
 import { ServerConfig } from '../src/types';
 import { createUserService } from '../src/services/userService';
+import { createMetadataService } from '../src/services/metadataService.ts';
+import { createPackageEntryFromTarball } from '../src/services/npmPublishService.ts';
 import { calculateDist } from '../src/utils/npmPackage.ts';
 import {
   createTestDirectory,
@@ -145,6 +147,113 @@ describe('npm registry routes', () => {
       await server.close();
       server = undefined;
     }
+  });
+
+  test('rejects an archive whose storage name disagrees with its validated package identity', async ({
+    task,
+  }) => {
+    const dir = await createTestDirectory('npm-registry', task.name);
+    const storage = createMetadataService(
+      dir,
+      'http://localhost',
+      silentLogger
+    );
+    await storage.initialize();
+    const bytes = await createPackageTarball({
+      name: 'demo',
+      version: '1.0.0',
+    });
+    const entry = await createPackageEntryFromTarball(
+      bytes,
+      'http://localhost'
+    );
+    entry.storage.tarballName = 'another-archive.tgz';
+    await expect(storage.addPackageEntry(entry, bytes)).rejects.toThrow(
+      /storage identity/
+    );
+    expect(storage.getPackageMetadata('demo')).toEqual([]);
+    expect(await fs.readdir(dir)).toEqual([]);
+  });
+
+  test('serves icons only for registered packages and keeps linked files within the registry', async (context) => {
+    const configDir = await createTestDirectory(
+      'npm-registry',
+      context.task.name
+    );
+    const packageDir = path.join(configDir, 'packages');
+    await fs.mkdir(packageDir);
+    const app = await createFastifyInstance(
+      { port: 0, configDir, packageDir },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+    const tarball = await createPackageTarball({
+      name: '@demo/Icons',
+      version: '1.0.0-RC.1',
+    });
+    const published = await app.inject({
+      method: 'POST',
+      url: '/api/publish',
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: tarball,
+    });
+    expect(published.statusCode).toBe(201);
+    const directory = path.join(packageDir, '@demo', 'Icons', '1.0.0-RC.1');
+    const icon = path.join(directory, 'icon.png');
+    await fs.writeFile(icon, 'registered icon');
+    expect(
+      (await app.inject('/api/ui/icon/%40demo%2FIcons/1.0.0-RC.1')).body
+    ).toBe('registered icon');
+    expect((await app.inject('/api/ui/icon/%40demo%2FIcons/0.9.0')).body).toBe(
+      'registered icon'
+    );
+    await fs.mkdir(path.join(packageDir, 'unpublished', '1.0.0'), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(packageDir, 'unpublished', '1.0.0', 'icon.png'),
+      'unregistered'
+    );
+    expect(
+      (await app.inject('/api/ui/icon/unpublished/1.0.0')).statusCode
+    ).toBe(404);
+    await fs.unlink(icon);
+    const outside = path.join(configDir, 'sample-image');
+    await fs.writeFile(outside, 'outside');
+    await fs.symlink(outside, icon);
+    expect(
+      (await app.inject('/api/ui/icon/%40demo%2FIcons/1.0.0-RC.1')).statusCode
+    ).toBe(404);
+  });
+
+  test('refuses a linked package directory on publish without changing its target', async ({
+    task,
+  }) => {
+    const dir = await createTestDirectory('npm-registry', task.name);
+    const packages = path.join(dir, 'packages');
+    const sibling = path.join(dir, 'sibling');
+    await fs.mkdir(packages);
+    await fs.mkdir(sibling);
+    await fs.symlink(sibling, path.join(packages, 'sample'), 'dir');
+    const app = await createFastifyInstance(
+      { port: 0, configDir: dir, packageDir: packages },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+    const payload = await createPackageTarball({
+      name: 'sample',
+      version: '1.0.0',
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/publish',
+      headers: { 'content-type': 'application/octet-stream' },
+      payload,
+    });
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(await fs.readdir(sibling)).toEqual([]);
   });
 
   test('should reject invalid versions before either publish API writes package files', async (context) => {
@@ -508,9 +617,8 @@ describe('npm registry routes', () => {
       }
     );
     expect(publishResponse.status).toBe(201);
-    await expect(fs.access(distTagsPath)).rejects.toHaveProperty(
-      'code',
-      'ENOENT'
+    expect(await fs.readdir(path.dirname(distTagsPath))).not.toContain(
+      'dist-tags.json'
     );
 
     const duplicateResponse = await fetch(
@@ -580,9 +688,8 @@ describe('npm registry routes', () => {
       }
     );
     expect(deleteTagResponse.status).toBe(200);
-    await expect(fs.access(distTagsPath)).rejects.toHaveProperty(
-      'code',
-      'ENOENT'
+    expect(await fs.readdir(path.dirname(distTagsPath))).not.toContain(
+      'dist-tags.json'
     );
 
     const tagsAfterDeleteResponse = await fetch(

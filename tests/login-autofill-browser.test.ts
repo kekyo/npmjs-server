@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -70,6 +70,23 @@ describe('Login autofill through Playwright MCP', () => {
         users.destroy();
       }
 
+      if (totpEnabled) {
+        // Older installations could already have a second factor enrolled.
+        const file = join(directory, 'users.json');
+        const [account] = JSON.parse(await readFile(file, 'utf8'));
+        account.salt = 'legacy-salt';
+        account.passwordHash = 'WM9rs4KD+GJRj2JwySDxDBDCQkY=';
+        account.npmTokens = [
+          {
+            key: 'build-key',
+            label: 'CI',
+            createdAt: '2020-01-01',
+            salt: 'legacy-salt',
+            tokenHash: 'aTy4FwQS0BXd7NhDZA4YVA/r4mE=',
+          },
+        ];
+        await writeFile(file, JSON.stringify([account]));
+      }
       const port = await getTestPort();
       await mkdir(join(directory, 'packages'), { recursive: true });
       const configFile = join(directory, 'config.json');
@@ -180,6 +197,11 @@ describe('Login autofill through Playwright MCP', () => {
             'async () => await (await fetch("api/auth/session")).json()'
           );
           expect(session.authenticated).toBe(false);
+          expect(
+            await evaluate(
+              '() => document.body.innerText.includes("Your password was previously stored")'
+            )
+          ).toBe(false);
           await call('browser_click', { target: 'input[type="checkbox"]' });
           await call('browser_type', {
             target: 'input[autocomplete="one-time-code"]',
@@ -198,6 +220,66 @@ describe('Login autofill through Playwright MCP', () => {
         }>('async () => await (await fetch("api/auth/session")).json()');
         expect(session.authenticated).toBe(true);
         expect(session.user.username).toBe('alice');
+        const hasReminder = await evaluate<boolean>(
+          '() => document.body.innerText.includes("Your password was previously stored")'
+        );
+        expect(hasReminder).toBe(totpEnabled);
+        if (totpEnabled) {
+          const openFromMenu = async (label: string) => {
+            await call('browser_click', {
+              target: 'button:has(.MuiAvatar-root)',
+            });
+            await call('browser_click', {
+              target: `role=menuitem[name="${label}"]`,
+            });
+          };
+          await openFromMenu('Reset Password');
+          await call('browser_wait_for', {
+            text: 'Passwords awaiting migration (0) · npm tokens awaiting migration (1)',
+          });
+          await call('browser_press_key', { key: 'Escape' });
+          await openFromMenu('npm tokens');
+          await call('browser_wait_for', {
+            text: 'This token is still stored in the old format.',
+          });
+          await call('browser_press_key', { key: 'Escape' });
+          const whoami = await fetch(`http://127.0.0.1:${port}/-/whoami`, {
+            headers: { authorization: 'Bearer npmjs_fixture' },
+          });
+          expect((await whoami.json()).username).toBe('alice');
+          await openFromMenu('npm tokens');
+          await call('browser_wait_for', {
+            text: 'This token’s storage format has been updated.',
+          });
+          await call('browser_press_key', { key: 'Escape' });
+          await call('browser_click', {
+            target: '[role="alert"] button:has-text("Change Password")',
+          });
+          await call('browser_type', {
+            target: 'input[name="currentPassword"]',
+            text: password,
+          });
+          await call('browser_type', {
+            target: 'input[name="newPassword"]',
+            text: 'Fresh-Autofill-Password!456',
+          });
+          await call('browser_type', {
+            target: 'input[name="confirmPassword"]',
+            text: 'Fresh-Autofill-Password!456',
+          });
+          await call('browser_click', {
+            target: '.MuiDrawer-paper button:has-text("Change Password")',
+          });
+          await call('browser_wait_for', {
+            text: 'Password updated successfully',
+          });
+          await call('browser_wait_for', { text: 'Username' });
+          expect(
+            await evaluate(
+              '() => document.body.innerText.includes("Your password was previously stored")'
+            )
+          ).toBe(false);
+        }
       } finally {
         await client.close();
         if (server.exitCode === null) {
