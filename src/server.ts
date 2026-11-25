@@ -757,13 +757,18 @@ export const createFastifyInstance = async (
   const publicPath = resolveEnvironmentPath(['ui', 'public'], ['ui']);
 
   // Helper function to serve static files using streaming
-  const serveStaticFile = (
+  const serveStaticFile = async (
+    root: string,
     filePath: string,
     reply: FastifyReply,
     signal?: AbortSignal
   ) => {
     // Use the unified file streaming helper
-    return streamFile(logger, locker, filePath, reply, {}, signal);
+    if (
+      !(await streamFile(logger, locker, root, filePath, reply, {}, signal))
+    ) {
+      await reply.status(404).send({ error: 'File not found' });
+    }
   };
 
   // Serve UI at root path with Content Negotiation
@@ -779,40 +784,49 @@ export const createFastifyInstance = async (
     }
 
     // Serve UI for non-JSON requests
-    const indexPath = path.join(uiPath, 'index.html');
-    return serveStaticFile(indexPath, reply, request.abortSignal);
+    return serveStaticFile(uiPath, 'index.html', reply, request.abortSignal);
   });
 
   // Serve login page
   fastify.get('/login', (request, reply) => {
-    const loginPath = path.join(uiPath, 'login.html');
-    return serveStaticFile(loginPath, reply, request.abortSignal);
+    return serveStaticFile(uiPath, 'login.html', reply, request.abortSignal);
   });
 
   // Serve other UI assets
   fastify.get('/assets/*', (request, reply) => {
     const assetPath = (request.params as any)['*'];
-    const fullPath = path.join(uiPath, 'assets', assetPath);
-    return serveStaticFile(fullPath, reply, request.abortSignal);
+    return serveStaticFile(
+      path.join(uiPath, 'assets'),
+      assetPath,
+      reply,
+      request.abortSignal
+    );
   });
 
   // Serve favicon
   fastify.get('/favicon.ico', (request, reply) => {
-    const faviconPath = path.join(publicPath, 'favicon.ico');
-    return serveStaticFile(faviconPath, reply, request.abortSignal);
+    return serveStaticFile(
+      publicPath,
+      'favicon.ico',
+      reply,
+      request.abortSignal
+    );
   });
 
   // Serve icon
   fastify.get('/icon.png', (request, reply) => {
-    const iconPath = path.join(publicPath, 'icon.png');
-    return serveStaticFile(iconPath, reply, request.abortSignal);
+    return serveStaticFile(publicPath, 'icon.png', reply, request.abortSignal);
   });
 
   // Serve locale files for internationalization
   fastify.get('/locale/*', (request, reply) => {
     const localePath = (request.params as any)['*'];
-    const fullPath = path.join(publicPath, 'locale', localePath);
-    return serveStaticFile(fullPath, reply, request.abortSignal);
+    return serveStaticFile(
+      path.join(publicPath, 'locale'),
+      localePath,
+      reply,
+      request.abortSignal
+    );
   });
 
   // Store services on fastify instance for cleanup

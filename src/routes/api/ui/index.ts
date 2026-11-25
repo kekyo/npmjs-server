@@ -3,7 +3,6 @@
 // License under MIT.
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { promises as fs } from 'fs';
 import { join } from 'path';
 import type { ReaderWriterLock } from 'async-primitives';
 import type { Logger } from '../../../types.ts';
@@ -668,84 +667,32 @@ export const registerUiRoutes = async (
       try {
         logger.info(`Serving icon for package: ${packageId} ${version}`);
 
-        // Try to get icon from package metadata or storage
-        const lowerVersion = version.toLowerCase();
-
-        // Look for icon file in package directory (preserve original packageId case)
-        const packageDir = join(packagesRoot, packageId, lowerVersion);
-        const iconExtensions = ['png', 'jpg', 'jpeg', 'gif', 'svg'];
-
-        for (const ext of iconExtensions) {
-          try {
-            const iconPath = join(packageDir, `icon.${ext}`);
-            await fs.access(iconPath); // Check if file exists
-
-            // Use streamFile with appropriate content type and cache control
-            const contentType =
-              ext === 'svg' ? 'image/svg+xml' : `image/${ext}`;
-            logger.info(`Icon served successfully: ${packageId} ${version}`);
-
-            await streamFile(
-              logger,
-              locker,
-              iconPath,
-              reply,
-              {
-                contentType,
-                cacheControl: 'public, max-age=3600',
-              },
-              request.abortSignal
+        // Try the registered version first, then the latest version as a fallback.
+        const requested = metadataService.getPackageEntry(packageId, version);
+        const latest = metadataService.getLatestPackageEntry(packageId);
+        for (const entry of new Set([requested, latest])) {
+          if (!entry) continue;
+          for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'svg']) {
+            const icon = join(
+              ...entry.storage.packagePathSegments,
+              entry.storage.version,
+              `icon.${ext}`
             );
-            return;
-          } catch (error: any) {
-            // Continue to next extension
-          }
-        }
-
-        // Icon not found in specified version, try latest version as fallback
-        logger.info(
-          `Icon not found in version ${version}, trying latest version for package: ${packageId}`
-        );
-
-        const latestEntry = metadataService.getLatestPackageEntry(packageId);
-        if (latestEntry && latestEntry.metadata.version !== version) {
-          logger.info(
-            `Trying fallback to latest version: ${latestEntry.metadata.version}`
-          );
-
-          const latestPackageDir = join(
-            packagesRoot,
-            ...latestEntry.storage.packagePathSegments,
-            latestEntry.metadata.version
-          );
-
-          for (const ext of iconExtensions) {
-            try {
-              const iconPath = join(latestPackageDir, `icon.${ext}`);
-              await fs.access(iconPath); // Check if file exists
-
-              // Use streamFile with appropriate content type and cache control
-              const contentType =
-                ext === 'svg' ? 'image/svg+xml' : `image/${ext}`;
-              logger.info(
-                `Icon served from latest version: ${packageId} ${latestEntry.metadata.version} (requested: ${version})`
-              );
-
+            if (
               await streamFile(
                 logger,
                 locker,
-                iconPath,
+                packagesRoot,
+                icon,
                 reply,
                 {
-                  contentType,
+                  contentType: ext === 'svg' ? 'image/svg+xml' : `image/${ext}`,
                   cacheControl: 'public, max-age=3600',
                 },
                 request.abortSignal
-              );
+              )
+            )
               return;
-            } catch (error: any) {
-              // Continue to next extension
-            }
           }
         }
 

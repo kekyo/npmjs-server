@@ -147,6 +147,58 @@ describe('npm registry routes', () => {
     }
   });
 
+  test('serves icons only for registered packages and keeps linked files within the registry', async (context) => {
+    const configDir = await createTestDirectory(
+      'npm-registry',
+      context.task.name
+    );
+    const packageDir = path.join(configDir, 'packages');
+    await fs.mkdir(packageDir);
+    const app = await createFastifyInstance(
+      { port: 0, configDir, packageDir },
+      silentLogger,
+      createReaderWriterLock()
+    );
+    server = app;
+    const tarball = await createPackageTarball({
+      name: '@demo/Icons',
+      version: '1.0.0-RC.1',
+    });
+    const published = await app.inject({
+      method: 'POST',
+      url: '/api/publish',
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: tarball,
+    });
+    expect(published.statusCode).toBe(201);
+    const directory = path.join(packageDir, '@demo', 'Icons', '1.0.0-RC.1');
+    const icon = path.join(directory, 'icon.png');
+    await fs.writeFile(icon, 'registered icon');
+    expect(
+      (await app.inject('/api/ui/icon/%40demo%2FIcons/1.0.0-RC.1')).body
+    ).toBe('registered icon');
+    expect((await app.inject('/api/ui/icon/%40demo%2FIcons/0.9.0')).body).toBe(
+      'registered icon'
+    );
+    await fs.mkdir(path.join(packageDir, 'unpublished', '1.0.0'), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(packageDir, 'unpublished', '1.0.0', 'icon.png'),
+      'unregistered'
+    );
+    expect(
+      (await app.inject('/api/ui/icon/unpublished/1.0.0')).statusCode
+    ).toBe(404);
+    await fs.unlink(icon);
+    const outside = path.join(configDir, 'sample-image');
+    await fs.writeFile(outside, 'outside');
+    await fs.symlink(outside, icon);
+    expect(
+      (await app.inject('/api/ui/icon/%40demo%2FIcons/1.0.0-RC.1')).statusCode
+    ).toBe(404);
+  });
+
   test('should reject invalid versions before either publish API writes package files', async (context) => {
     const configDir = await createTestDirectory(
       'npm-registry',

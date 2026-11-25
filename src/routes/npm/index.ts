@@ -14,7 +14,7 @@ import type {
 import type { AuthService } from '../../services/authService.ts';
 import type { UserService } from '../../services/userService.ts';
 import type { TotpService } from '../../services/totpService.ts';
-import { createPackageService } from '../../services/packageService.ts';
+import { join } from 'node:path';
 import { publishNpmTarball } from '../../services/npmPublishService.ts';
 import {
   createNpmHybridAuthMiddleware,
@@ -28,6 +28,7 @@ import {
   decodePackageName,
   encodePackageNameForPath,
   isValidPackageName,
+  packageNameToPathSegments,
 } from '../../utils/npmPackage.ts';
 import { streamFile } from '../../utils/fileStreaming.ts';
 import {
@@ -391,10 +392,6 @@ export const registerNpmRoutes = async (
     proxyMetadataService,
     proxyService,
   } = config;
-  const packageService = createPackageService(packagesRoot);
-  const proxyPackageService = proxyService
-    ? createPackageService(proxyService.packagesRoot)
-    : undefined;
   const loginFlows = new Map<string, NpmLoginFlow>();
 
   const secondFactorForm = (message: string): string => `<!doctype html>
@@ -881,24 +878,15 @@ export const registerNpmRoutes = async (
   const streamPackageTarball = async (
     request: FastifyRequest,
     reply: FastifyReply,
-    service: ReturnType<typeof createPackageService>,
-    packageName: string,
-    metadata: PackageVersionMetadata,
-    tarballName: string
+    root: string,
+    metadata: PackageVersionMetadata
   ) => {
-    const tarballPath = await service.getTarballFilePath(
-      packageName,
-      metadata.version,
-      tarballName
-    );
-    if (!tarballPath) {
-      return false;
-    }
-
-    await streamFile(
+    const { name, version, tarballName } = metadata;
+    return await streamFile(
       logger,
       locker,
-      tarballPath,
+      root,
+      join(...packageNameToPathSegments(name), version, tarballName),
       reply,
       {
         contentType: 'application/octet-stream',
@@ -906,7 +894,6 @@ export const registerNpmRoutes = async (
       },
       request.abortSignal
     );
-    return true;
   };
 
   const getTarballMetadata = (
@@ -924,7 +911,7 @@ export const registerNpmRoutes = async (
     packageName: string,
     tarballName: string
   ) => {
-    if (!proxyService || !proxyPackageService) {
+    if (!proxyService) {
       return false;
     }
 
@@ -957,10 +944,8 @@ export const registerNpmRoutes = async (
       return streamPackageTarball(
         request,
         reply,
-        proxyPackageService,
-        packageName,
-        metadata,
-        metadata.tarballName
+        proxyService.packagesRoot,
+        metadata
       );
     } catch (error) {
       if (isNpmProxyError(error)) {
@@ -985,14 +970,7 @@ export const registerNpmRoutes = async (
     );
     if (
       expectedEntry &&
-      (await streamPackageTarball(
-        request,
-        reply,
-        packageService,
-        packageName,
-        expectedEntry,
-        tarballName
-      ))
+      (await streamPackageTarball(request, reply, packagesRoot, expectedEntry))
     ) {
       return;
     }
@@ -1002,14 +980,12 @@ export const registerNpmRoutes = async (
       : undefined;
     if (
       proxyCacheEntry &&
-      proxyPackageService &&
+      proxyService &&
       (await streamPackageTarball(
         request,
         reply,
-        proxyPackageService,
-        packageName,
-        proxyCacheEntry,
-        tarballName
+        proxyService.packagesRoot,
+        proxyCacheEntry
       ))
     ) {
       return;
