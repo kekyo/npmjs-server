@@ -39,6 +39,18 @@ it('limits expensive routes by the trusted client IP before processing the reque
         url
       ).toBeGreaterThan(0);
     }
+    for (const [method, url] of [
+      ['POST', '/api/auth/login'],
+      ['POST', '/npm-login/sample'],
+      ['PUT', '/-/user/example'],
+    ] as const) {
+      const response = await app.inject({
+        method,
+        url,
+        payload: { username: 'example', password: 'x'.repeat(20_000) },
+      });
+      expect(response.statusCode, url).toBe(413);
+    }
     const request = {
       method: 'POST' as const,
       url: '/api/auth/login',

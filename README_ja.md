@@ -833,7 +833,7 @@ TOTPの試行回数制限は別に適用します。
 | — | `NPMJS_SERVER_PASSWORD_MIN_SCORE` | `passwordMinScore` | パスワードの最小強度、0～4 | `2` |
 | — | `NPMJS_SERVER_PASSWORD_STRENGTH_CHECK` | `passwordStrengthCheck` | 強度判定、`true` / `false` | `true` |
 | — | `NPMJS_SERVER_DUPLICATE_PACKAGE_POLICY` | `duplicatePackagePolicy` | `overwrite`, `ignore`, `error` | `ignore` |
-| `--max-upload-size-mb <size>` | `NPMJS_SERVER_MAX_UPLOAD_SIZE_MB` | `maxUploadSizeMb` | アップロード要求の上限、1～10000MB | `100` |
+| `--max-upload-size-mb <size>` | `NPMJS_SERVER_MAX_UPLOAD_SIZE_MB` | `maxUploadSizeMb` | アップロード要求とインポート時の各応答の上限、1～10000MB | `100` |
 | — | `NPMJS_SERVER_AUTH_FAILURE_DELAY_ENABLED` | — | パスワード認証失敗時の遅延、`true` / `false` | `true` |
 | — | `NPMJS_SERVER_AUTH_FAILURE_MAX_DELAY` | — | パスワード認証失敗時の最大遅延、ミリ秒 | `10000` |
 | — | `NPMJS_SERVER_TOTP_KEY_FILE` | `totpKeyFile` | TOTP登録キーを暗号化する鍵の保存先 | `<configDir>/totp.key` |

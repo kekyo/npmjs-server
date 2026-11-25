@@ -10,6 +10,7 @@ import Fastify, {
 } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import {
+  loginBodyLimit,
   loginRateLimit,
   publicReadRateLimit,
 } from './services/requestLimits.ts';
@@ -507,6 +508,7 @@ export const createFastifyInstance = async (
   fastify.post(
     '/api/auth/login',
     {
+      bodyLimit: loginBodyLimit,
       config: { rateLimit: loginRateLimit },
       schema: {
         body: {
@@ -566,6 +568,7 @@ export const createFastifyInstance = async (
           },
         };
       } catch (error) {
+        if ((error as { statusCode?: number }).statusCode === 503) throw error;
         if ((error as { statusCode?: number }).statusCode === 429) {
           return reply
             .code(429)

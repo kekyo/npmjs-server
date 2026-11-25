@@ -139,7 +139,8 @@ export interface UserService {
   readonly getAllUsers: () => Promise<User[]>;
   readonly updateUser: (
     username: string,
-    updates: Partial<Pick<User, 'role'>> | { password: string }
+    updates: Partial<Pick<User, 'role'>> | { password: string },
+    expected?: Pick<User, 'id' | 'authVersion'>
   ) => Promise<User | undefined>;
   readonly deleteUser: (username: string) => Promise<boolean>;
   readonly validateCredentials: (
@@ -153,7 +154,8 @@ export interface UserService {
   ) => Promise<NpmTokenListResponse | undefined>;
   readonly addNpmToken: (
     username: string,
-    label: string
+    label: string,
+    expected?: Pick<User, 'id' | 'authVersion'>
   ) => Promise<NpmTokenAddResponse | undefined>;
   readonly deleteNpmToken: (
     username: string,
@@ -326,6 +328,14 @@ export const createUserService = (config: UserServiceConfig): UserService => {
     }
   };
 
+  const matchesRevision = (
+    user: User,
+    expected: Pick<User, 'id' | 'authVersion'> | undefined
+  ): boolean =>
+    !expected ||
+    (user.id === expected.id &&
+      (user.authVersion ?? 0) === (expected.authVersion ?? 0));
+
   const service: UserService = {
     mutateTotp: async (username, authVersion, mutation, invalidateSessions) => {
       const handle = await fileLock.writeLock();
@@ -408,7 +418,7 @@ export const createUserService = (config: UserServiceConfig): UserService => {
           `Created user: ${request.username} with role: ${request.role}`
         );
 
-        return user;
+        return cloneUser(user);
       } finally {
         handle.release();
       }
@@ -445,15 +455,17 @@ export const createUserService = (config: UserServiceConfig): UserService => {
     /**
      * Updates user properties
      * @param username - Username to update
+     * @param expected - Account revision that authorized a self-service change.
      * @param updates - Properties to update
      * @returns Updated user or undefined if not found
      */
     updateUser: async (
       username: string,
-      updates: Partial<Pick<User, 'role'>> | { password: string }
+      updates: Partial<Pick<User, 'role'>> | { password: string },
+      expected?: Pick<User, 'id' | 'authVersion'>
     ): Promise<User | undefined> => {
       const original = await service.getUser(username);
-      if (!original) return undefined;
+      if (!original || !matchesRevision(original, expected)) return undefined;
       let credential: { salt: string; passwordHash: string } | undefined;
       if ('password' in updates) {
         validatePassword(updates.password, username);
@@ -466,7 +478,11 @@ export const createUserService = (config: UserServiceConfig): UserService => {
       const handle = await fileLock.writeLock();
       try {
         const user = users.get(username);
-        if (!user || user.id !== original.id) {
+        if (
+          !user ||
+          user.id !== original.id ||
+          !matchesRevision(user, expected)
+        ) {
           return undefined;
         }
 
@@ -484,7 +500,7 @@ export const createUserService = (config: UserServiceConfig): UserService => {
         });
 
         logger.info(`Updated user: ${username}`);
-        return updatedUser;
+        return cloneUser(updatedUser);
       } finally {
         handle.release();
       }
@@ -584,17 +600,19 @@ export const createUserService = (config: UserServiceConfig): UserService => {
     /**
      * Adds a new npm bearer token for a user.
      * @param username - Username
+     * @param expected - Account revision authenticated during npm login.
      * @param label - Token label
      * @returns Created token or undefined if user not found
      */
     addNpmToken: async (
       username: string,
-      label: string
+      label: string,
+      expected?: Pick<User, 'id' | 'authVersion'>
     ): Promise<NpmTokenAddResponse | undefined> => {
       const handle = await fileLock.writeLock();
       try {
         const user = users.get(username);
-        if (!user) {
+        if (!user || !matchesRevision(user, expected)) {
           return undefined;
         }
 

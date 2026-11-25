@@ -12,7 +12,7 @@ import type {
   PackageVersionMetadata,
 } from '../../services/metadataService.ts';
 import type { AuthService } from '../../services/authService.ts';
-import type { UserService } from '../../services/userService.ts';
+import type { User, UserService } from '../../services/userService.ts';
 import type { TotpService } from '../../services/totpService.ts';
 import { join } from 'node:path';
 import { publishNpmTarball } from '../../services/npmPublishService.ts';
@@ -30,7 +30,10 @@ import {
   isValidPackageName,
   packageNameToPathSegments,
 } from '../../utils/npmPackage.ts';
-import { loginRateLimit } from '../../services/requestLimits.ts';
+import {
+  loginBodyLimit,
+  loginRateLimit,
+} from '../../services/requestLimits.ts';
 import { streamFile } from '../../utils/fileStreaming.ts';
 import {
   isNpmProxyError,
@@ -467,7 +470,7 @@ export const registerNpmRoutes = async (
 
   fastify.post(
     '/-/v1/login',
-    { config: { rateLimit: loginRateLimit } },
+    { bodyLimit: loginBodyLimit, config: { rateLimit: loginRateLimit } },
     async (request, reply) => {
       // Keep pending, unclaimed login flows bounded even when clients never poll.
       const now = Date.now();
@@ -547,7 +550,7 @@ export const registerNpmRoutes = async (
 
   fastify.post(
     '/npm-login/:id',
-    { config: { rateLimit: loginRateLimit } },
+    { bodyLimit: loginBodyLimit, config: { rateLimit: loginRateLimit } },
     async (request, reply) => {
       const { id } = request.params as { id: string };
       const flow = loginFlows.get(id);
@@ -562,7 +565,7 @@ export const registerNpmRoutes = async (
         typeof request.body === 'object' && request.body
           ? (request.body as Record<string, any>)
           : {};
-      let username: string;
+      let authenticated: User;
       try {
         if (flow.totpChallenge) {
           const result = await totpService.verifyLogin(
@@ -572,9 +575,9 @@ export const registerNpmRoutes = async (
             body.recovery === true || body.recovery === 'on'
           );
           flow.totpChallenge = undefined;
-          username = result.user.username;
+          authenticated = result.user;
         } else {
-          username = String(body.username ?? '');
+          const username = String(body.username ?? '');
           const password = String(body.password ?? '');
           const user = await userService.validateCredentials(
             username,
@@ -586,6 +589,7 @@ export const registerNpmRoutes = async (
               .type('text/html')
               .send('Invalid credentials');
           }
+          authenticated = user;
           if (user.totp && authService.getAuthMode() !== 'none') {
             flow.totpChallenge = totpService.beginLogin(
               user,
@@ -601,6 +605,7 @@ export const registerNpmRoutes = async (
         }
       } catch (error) {
         const failure = error as { statusCode?: number; code?: string };
+        if (failure.statusCode === 503) throw error;
         if (failure.statusCode === 429) {
           return reply
             .status(429)
@@ -632,12 +637,14 @@ export const registerNpmRoutes = async (
           .send('Unable to complete verification.');
       }
 
+      const username = authenticated.username;
       const tokenResult = await userService.addNpmToken(
         username,
-        `npm web login ${new Date().toISOString()}`
+        `npm web login ${new Date().toISOString()}`,
+        authenticated
       );
       if (!tokenResult) {
-        return reply.status(404).type('text/html').send('User not found');
+        return reply.status(401).type('text/html').send('Sign in again');
       }
 
       flow.token = tokenResult.token;
@@ -652,7 +659,7 @@ export const registerNpmRoutes = async (
 
   fastify.put(
     '/-/user/*',
-    { config: { rateLimit: loginRateLimit } },
+    { bodyLimit: loginBodyLimit, config: { rateLimit: loginRateLimit } },
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       const routePath = (request.params as { '*': string })['*'];
@@ -710,10 +717,11 @@ export const registerNpmRoutes = async (
 
       const tokenResult = await userService.addNpmToken(
         username,
-        `npm legacy login ${new Date().toISOString()}`
+        `npm legacy login ${new Date().toISOString()}`,
+        user
       );
       if (!tokenResult) {
-        return reply.status(404).send({ error: 'User not found' });
+        return reply.status(401).send({ error: 'Sign in again' });
       }
 
       return reply.send({

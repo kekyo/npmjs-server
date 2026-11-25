@@ -838,7 +838,7 @@ A `—` means that the setting is not available through that method.
 | — | `NPMJS_SERVER_PASSWORD_MIN_SCORE` | `passwordMinScore` | Minimum password strength, 0–4 | `2` |
 | — | `NPMJS_SERVER_PASSWORD_STRENGTH_CHECK` | `passwordStrengthCheck` | Strength checking, `true` / `false` | `true` |
 | — | `NPMJS_SERVER_DUPLICATE_PACKAGE_POLICY` | `duplicatePackagePolicy` | `overwrite`, `ignore`, `error` | `ignore` |
-| `--max-upload-size-mb <size>` | `NPMJS_SERVER_MAX_UPLOAD_SIZE_MB` | `maxUploadSizeMb` | Upload request limit, 1–10000 MB | `100` |
+| `--max-upload-size-mb <size>` | `NPMJS_SERVER_MAX_UPLOAD_SIZE_MB` | `maxUploadSizeMb` | Maximum upload request or import response size, 1–10000 MB | `100` |
 | — | `NPMJS_SERVER_AUTH_FAILURE_DELAY_ENABLED` | — | Delay failed password authentication, `true` / `false` | `true` |
 | — | `NPMJS_SERVER_AUTH_FAILURE_MAX_DELAY` | — | Maximum delay for failed password authentication, in milliseconds | `10000` |
 | — | `NPMJS_SERVER_TOTP_KEY_FILE` | `totpKeyFile` | File containing the TOTP encryption key | `<configDir>/totp.key` |

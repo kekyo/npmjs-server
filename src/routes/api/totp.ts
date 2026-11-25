@@ -5,7 +5,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { User, UserService } from '../../services/userService.ts';
 import type { SessionService } from '../../services/sessionService.ts';
-import { loginRateLimit } from '../../services/requestLimits.ts';
+import {
+  loginBodyLimit,
+  loginRateLimit,
+} from '../../services/requestLimits.ts';
 import type { TotpService } from '../../services/totpService.ts';
 
 /**
@@ -46,6 +49,12 @@ export const registerTotpRoutes = async (
     scope.setErrorHandler((error, _request, reply) => {
       const failure = error as { code?: string; statusCode?: number };
       const status = failure.statusCode ?? 500;
+      if (failure.code === 'PASSWORD_BUSY') {
+        return reply
+          .code(503)
+          .header('Retry-After', '1')
+          .send({ success: false, code: failure.code });
+      }
       if (failure.code === 'TOTP_RATE_LIMITED')
         reply.header('Retry-After', '600');
       return reply.code(status).send({
@@ -56,6 +65,7 @@ export const registerTotpRoutes = async (
     scope.post<{ Body: { code: string; recovery?: boolean } }>(
       '/api/auth/login/totp',
       {
+        bodyLimit: loginBodyLimit,
         config: { rateLimit: loginRateLimit },
         schema: {
           body: {
@@ -94,6 +104,7 @@ export const registerTotpRoutes = async (
     }>(
       '/api/ui/totp',
       {
+        bodyLimit: loginBodyLimit,
         schema: {
           body: {
             type: 'object',

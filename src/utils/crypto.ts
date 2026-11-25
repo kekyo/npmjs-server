@@ -23,6 +23,13 @@ const derivePassword = async (
   password: string,
   salt: string
 ): Promise<Buffer> => {
+  if (passwordWorkers.pendingCount >= 8) {
+    throw Object.assign(new Error('Password processing is busy'), {
+      code: 'PASSWORD_BUSY',
+      statusCode: 503,
+      headers: { 'Retry-After': '1' },
+    });
+  }
   const worker = await passwordWorkers.acquire();
   try {
     return await new Promise<Buffer>((resolve, reject) => {

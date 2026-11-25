@@ -15,7 +15,10 @@ import {
   name as packageName,
   version,
 } from '../../../generated/packageMetadata.ts';
-import { publicReadRateLimit } from '../../../services/requestLimits.ts';
+import {
+  loginBodyLimit,
+  publicReadRateLimit,
+} from '../../../services/requestLimits.ts';
 import { streamFile } from '../../../utils/fileStreaming.ts';
 
 /**
@@ -470,6 +473,7 @@ export const registerUiRoutes = async (
   fastify.post(
     '/password',
     {
+      bodyLimit: loginBodyLimit,
       preHandler: [sessionOnlyAuth],
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -524,13 +528,12 @@ export const registerUiRoutes = async (
           );
 
           const updated = await userService.updateUser(
-            authRequest.user?.username || '',
-            {
-              password: body.newPassword,
-            }
+            user.username,
+            { password: body.newPassword },
+            user
           );
           if (!updated) {
-            return reply.status(404).send({ error: 'User not found' });
+            return reply.status(401).send({ error: 'Sign in again' });
           }
 
           logger.info(
