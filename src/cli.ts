@@ -22,7 +22,7 @@ import {
   getBaseUrlFromEnv,
   getTrustedProxiesFromEnv,
 } from './utils/urlResolver';
-import { runAuthInit } from './authInit';
+import { runAuthInit, runPasswordReset } from './authInit';
 import { runTotpReset } from './totpReset';
 import { runImportPackages } from './importPackages';
 import { loadConfigFromPath } from './utils/configLoader';
@@ -215,9 +215,15 @@ program
   )
   .addOption(
     new Option(
+      '--password-reset <username>',
+      "reset a user's password (stop the server first)"
+    ).conflicts(['authInit', 'totpReset'])
+  )
+  .addOption(
+    new Option(
       '--import-packages',
       'import from a hosted npm registry (stop the server first)'
-    ).conflicts(['authInit', 'totpReset'])
+    ).conflicts(['authInit', 'totpReset', 'passwordReset'])
   )
   .addOption(
     new Option(
@@ -428,6 +434,16 @@ program
         logger.error(
           'Package import failed. Check the source URL, credentials and destination.'
         );
+        process.exitCode = 1;
+      }
+      return;
+    }
+
+    if (options.passwordReset) {
+      try {
+        await runPasswordReset(config, logger, options.passwordReset);
+      } catch (error) {
+        logger.error(`Failed to reset password: ${error}`);
         process.exitCode = 1;
       }
       return;

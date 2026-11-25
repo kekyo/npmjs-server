@@ -286,6 +286,16 @@ npm login --registry http://localhost:4873/
 npm whoami --registry http://localhost:4873/
 ```
 
+#### 旧形式のパスワードとnpmトークンを更新する
+
+以前のバージョンがSHA-1形式で保存したパスワードとnpmトークンは、更新後のサーバーでは使えません。サーバーを停止し、次のコマンドで管理者のパスワードを再設定してください。ここでは管理者のユーザー名を `alice` とします。
+
+```bash
+npmjs-server --config-file ./config.json --password-reset alice
+```
+
+新しいパスワードを2回入力します。ユーザーID、権限、二段階認証の登録は引き継がれます。再起動後、管理者は管理UIでほかのユーザーのパスワードを再設定できます。各ユーザーは旧形式のnpmトークンを削除して再発行し、CIや `.npmrc` に設定したトークンを差し替えてください。
+
 ### ユーザーの管理
 
 管理者は管理UIからユーザーの追加・削除とパスワードのリセットを行えます。各ユーザーは自分のパスワードを変更できます。
@@ -830,6 +840,7 @@ TOTPの試行回数制限は別に適用します。
 | `--proxy` | `NPMJS_SERVER_PROXY_ENABLED` | `proxy.enabled` | 上位レジストリへのプロキシ、`true` / `false` | `false` |
 | `--proxy-upstream-registry <url>` | `NPMJS_SERVER_PROXY_UPSTREAM_REGISTRY` | `proxy.upstreamRegistry` | 上位レジストリのHTTP/HTTPS URL | `https://registry.npmjs.org` |
 | `--proxy-package-dir <dir>` | `NPMJS_SERVER_PROXY_PACKAGE_DIR` | `proxy.packageDir` | プロキシのキャッシュ保存先 | `<configDir>/proxy-packages` |
+| `--password-reset <username>` | — | — | サーバー停止中に指定ユーザーのパスワードを再設定 | — |
 | `--totp-reset <username>` | — | — | サーバー停止中に指定ユーザーのTOTPをリセット | — |
 | `--auth-init` | — | — | 対話形式で管理者を作成して終了 | — |
 | `--import-packages` | — | — | サーバー停止中にhostedレジストリから対話形式で取り込む | — |

@@ -291,6 +291,16 @@ npm login --registry http://localhost:4873/
 npm whoami --registry http://localhost:4873/
 ```
 
+#### Updating older passwords and npm tokens
+
+Passwords and npm tokens stored in the previous SHA-1 format no longer authenticate after upgrading. Stop the server and reset an administrator's password. For an administrator named `alice`, run:
+
+```bash
+npmjs-server --config-file ./config.json --password-reset alice
+```
+
+Enter the new password twice. The account keeps its ID, role and two-step authentication settings. After restarting, the administrator can reset other users' passwords in the administration UI. Each user should delete and reissue their old npm tokens and replace the values in CI and `.npmrc`.
+
 ### User Management
 
 Administrators can add or delete users and reset their passwords through the administration UI. Each user can change their own password.
@@ -835,6 +845,7 @@ A `—` means that the setting is not available through that method.
 | `--proxy` | `NPMJS_SERVER_PROXY_ENABLED` | `proxy.enabled` | Upstream registry proxy, `true` / `false` | `false` |
 | `--proxy-upstream-registry <url>` | `NPMJS_SERVER_PROXY_UPSTREAM_REGISTRY` | `proxy.upstreamRegistry` | Upstream registry HTTP/HTTPS URL | `https://registry.npmjs.org` |
 | `--proxy-package-dir <dir>` | `NPMJS_SERVER_PROXY_PACKAGE_DIR` | `proxy.packageDir` | Proxy cache directory | `<configDir>/proxy-packages` |
+| `--password-reset <username>` | — | — | Reset a user's password while the server is stopped | — |
 | `--totp-reset <username>` | — | — | Reset a user's TOTP while the server is stopped | — |
 | `--auth-init` | — | — | Create an administrator interactively and exit | — |
 | `--import-packages` | — | — | Interactively import from a hosted registry while the server is stopped | — |

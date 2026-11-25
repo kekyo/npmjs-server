@@ -135,6 +135,8 @@ export default defineConfig(({ mode, command }) => {
       rolldownOptions: {
         ...buildLogOptions,
         external: [
+          /^node:/,
+          '@fastify/rate-limit',
           'commander',
           'fs/promises',
           'fs',

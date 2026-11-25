@@ -2,8 +2,7 @@
 // Copyright (c) Kouji Matsui (@kekyo@mi.kekyo.net)
 // License under MIT.
 
-import { constants } from 'fs';
-import { readFile, access } from 'fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'path';
 import { createReaderWriterLock } from 'async-primitives';
 import type { Logger, ServerConfig } from '../types.ts';
@@ -13,6 +12,8 @@ import {
   hashPassword,
   verifyPassword,
   generateNpmToken,
+  npmTokenDigest,
+  matchesNpmToken,
   generateNpmTokenKey,
   generateUserId,
 } from '../utils/crypto.ts';
@@ -28,7 +29,6 @@ export interface NpmToken {
   key: string;
   label: string;
   tokenHash: string;
-  salt: string;
   createdAt: string;
   lastUsedAt?: string;
 }
@@ -181,10 +181,7 @@ export const createUserService = (config: UserServiceConfig): UserService => {
   const loadUsers = async (): Promise<void> => {
     const handle = await fileLock.readLock();
     try {
-      // Check if file exists
-      await access(usersFilePath, constants.R_OK);
-
-      // Read and parse file
+      // Read and parse the file, treating only a missing store as empty.
       const content = await readFile(usersFilePath, 'utf-8');
       const usersArray: User[] = JSON.parse(content);
 
@@ -379,16 +376,16 @@ export const createUserService = (config: UserServiceConfig): UserService => {
      * @returns Created user
      */
     createUser: async (request: CreateUserRequest): Promise<User> => {
+      validateUsername(request.username);
+      validatePassword(request.password, request.username);
+      validateRole(request.role);
+      // Derive the hash without blocking unrelated reads or writes to the account store.
+      const passwordSalt = generateSalt();
+      const passwordHash = await hashPassword(request.password, passwordSalt);
       const handle = await fileLock.writeLock();
       try {
         const user = await persistUsersMutation(() => {
           validateUsername(request.username);
-          validatePassword(request.password, request.username);
-          validateRole(request.role);
-
-          // Generate salts and hashes
-          const passwordSalt = generateSalt();
-          const passwordHash = hashPassword(request.password, passwordSalt);
 
           const now = new Date().toISOString();
           const createdUser: User = {
@@ -455,10 +452,21 @@ export const createUserService = (config: UserServiceConfig): UserService => {
       username: string,
       updates: Partial<Pick<User, 'role'>> | { password: string }
     ): Promise<User | undefined> => {
+      const original = await service.getUser(username);
+      if (!original) return undefined;
+      let credential: { salt: string; passwordHash: string } | undefined;
+      if ('password' in updates) {
+        validatePassword(updates.password, username);
+        const salt = generateSalt();
+        credential = {
+          salt,
+          passwordHash: await hashPassword(updates.password, salt),
+        };
+      }
       const handle = await fileLock.writeLock();
       try {
         const user = users.get(username);
-        if (!user) {
+        if (!user || user.id !== original.id) {
           return undefined;
         }
 
@@ -468,16 +476,7 @@ export const createUserService = (config: UserServiceConfig): UserService => {
             user.role = updates.role;
           }
 
-          if ('password' in updates && updates.password) {
-            validatePassword(updates.password, username);
-            const newPasswordSalt = generateSalt();
-            const newPasswordHash = hashPassword(
-              updates.password,
-              newPasswordSalt
-            );
-            user.passwordHash = newPasswordHash;
-            user.salt = newPasswordSalt;
-          }
+          if (credential) Object.assign(user, credential);
 
           user.updatedAt = new Date().toISOString();
           user.authVersion = (user.authVersion ?? 0) + 1;
@@ -530,8 +529,12 @@ export const createUserService = (config: UserServiceConfig): UserService => {
         return undefined;
       }
 
-      const isValid = verifyPassword(password, user.passwordHash, user.salt);
-      return isValid ? user : undefined;
+      if (!(await verifyPassword(password, user.passwordHash, user.salt)))
+        return undefined;
+      const current = await service.getUser(username);
+      return current?.id === user.id && current.authVersion === user.authVersion
+        ? current
+        : undefined;
     },
 
     /**
@@ -613,8 +616,7 @@ export const createUserService = (config: UserServiceConfig): UserService => {
           }
 
           const token = generateNpmToken();
-          const salt = generateSalt();
-          const tokenHash = hashPassword(token, salt);
+          const tokenHash = 'sha256$' + npmTokenDigest(token).toString('hex');
           const now = new Date().toISOString();
           const key = generateNpmTokenKey();
 
@@ -622,7 +624,6 @@ export const createUserService = (config: UserServiceConfig): UserService => {
             key,
             label,
             tokenHash,
-            salt,
             createdAt: now,
           });
           user.updatedAt = now;
@@ -696,11 +697,12 @@ export const createUserService = (config: UserServiceConfig): UserService => {
         return undefined;
       }
 
+      const digest = npmTokenDigest(token);
       const handle = await fileLock.writeLock();
       try {
         for (const user of users.values()) {
           for (const npmToken of user.npmTokens ?? []) {
-            if (verifyPassword(token, npmToken.tokenHash, npmToken.salt)) {
+            if (matchesNpmToken(npmToken.tokenHash, digest)) {
               await persistUsersMutation(() => {
                 npmToken.lastUsedAt = new Date().toISOString();
                 user.updatedAt = npmToken.lastUsedAt;
