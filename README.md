@@ -293,13 +293,19 @@ npm whoami --registry http://localhost:4873/
 
 #### Updating older passwords and npm tokens
 
-Passwords and npm tokens stored in the previous SHA-1 format no longer authenticate after upgrading. Stop the server and reset an administrator's password. For an administrator named `alice`, run:
+Passwords and npm tokens stored in the old SHA-1 format continue to work after the upgrade. Support for this format will end in a future release. The cutoff will be announced in advance.
+
+- When you enter the correct password in the web UI or with `npm login`, the server updates its stored hash to scrypt. The web UI recommends choosing a new password until you change it. You can continue using the registry in the meantime.
+- Each npm token moves to SHA-256 the next time it authenticates. CI and `.npmrc` can keep using the same token value. Open “npm tokens” in the user menu to see each token's migration status or revoke unused tokens. If you choose to rotate a token, confirm the replacement works before revoking the old one.
+- Administrators can open “Reset Password” in the user menu to see how many passwords and npm tokens still use the old format. They can also reset passwords for users who have not signed in.
+
+If an administrator has forgotten their password, stop the server and run the following command. This example uses an administrator named `alice`.
 
 ```bash
 npmjs-server --config-file ./config.json --password-reset alice
 ```
 
-Enter the new password twice. The account keeps its ID, role and two-step authentication settings. After restarting, the administrator can reset other users' passwords in the administration UI. Each user should delete and reissue their old npm tokens and replace the values in CI and `.npmrc`.
+Enter the new password twice and restart the server. The account keeps its ID, role and two-step authentication settings.
 
 ### User Management
 
